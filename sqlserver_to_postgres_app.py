@@ -35,6 +35,8 @@ if 'config' not in st.session_state:
         "PG_DB_NAME": "scada_data",
         "PG_TABLE_NAME": "scada_data_streamlined"
     }
+if 'log_messages' not in st.session_state:
+    st.session_state.log_messages = []
 
 # ==============================================================================
 #       _               _           _   _
@@ -57,6 +59,16 @@ DEFAULT_CONFIG = {
     "PG_DB_NAME": "scada_data",
     "PG_TABLE_NAME": "scada_data_streamlined"
 }
+
+# ---------------------------
+# Utility function for logging to the UI
+# ---------------------------
+def log_to_ui(message, level="info"):
+    """Appends a message to the session state log for UI display."""
+    timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
+    st.session_state.log_messages.append(f"[{timestamp}] [{level.upper()}] {message}")
+    if len(st.session_state.log_messages) > 100:
+        st.session_state.log_messages.pop(0)
 
 # ==============================================================================
 #       _  _         _
@@ -172,21 +184,25 @@ def sync_continuously_correct(config, password, stop_event):
     while not stop_event.is_set():
         sql_conn, pg_conn = None, None
         try:
+            log_to_ui("--- Starting new sync cycle ---")
+            
             # Step 1: Connect to SQL Server
             conn_str = f'DRIVER={{ODBC Driver 17 for SQL Server}};SERVER={config["SQL_SERVER_NAME"]};DATABASE={config["SQL_DB_NAME"]};Trusted_Connection=yes;'
-            st.toast("ℹ️ Connecting to SQL Server...")
+            log_to_ui(f"Connecting to SQL Server: {config['SQL_SERVER_NAME']}...")
             sql_conn = pyodbc.connect(conn_str)
-            st.toast(f"✅ Connected to SQL Server at `{config['SQL_SERVER_NAME']}`.")
+            log_to_ui(f"✅ Connected to SQL Server at `{config['SQL_SERVER_NAME']}`.")
             sql_cursor = sql_conn.cursor()
 
             # Step 2: Determine the synchronization start timestamp
-            st.toast("ℹ️ Connecting to PostgreSQL to get the latest timestamp...")
+            log_to_ui(f"Connecting to PostgreSQL to get the latest timestamp...")
             pg_conn = psycopg2.connect(host=config['PG_HOST'], port=config['PG_PORT'], user=config['PG_USER'], password=password, dbname=config['PG_DB_NAME'])
+            log_to_ui("✅ Connected to PostgreSQL.")
             pg_cursor = pg_conn.cursor()
 
             pg_cursor.execute(f'SELECT "DateAndTime", "TagIndex" FROM "{config["PG_TABLE_NAME"]}" ORDER BY "DateAndTime" DESC LIMIT 1;')
             result = pg_cursor.fetchone()
             latest_timestamp_pg = result[0] if result else None
+            log_to_ui(f"Latest timestamp in PostgreSQL is: `{latest_timestamp_pg}`.")
             
             if latest_timestamp_pg is None:
                 sql_query = f"""
@@ -194,7 +210,7 @@ def sync_continuously_correct(config, password, stop_event):
                 FROM {config['SQL_TABLE_NAME']}
                 ORDER BY "DateAndTime" ASC;
                 """
-                st.toast("⚠️ Destination table is empty. Performing an initial sync.")
+                log_to_ui("⚠️ Destination table is empty. Performing an initial sync.")
                 sql_cursor.execute(sql_query)
                 rows = sql_cursor.fetchall()
             else:
@@ -204,14 +220,14 @@ def sync_continuously_correct(config, password, stop_event):
                 WHERE "DateAndTime" > ?
                 ORDER BY "DateAndTime" ASC;
                 """
-                st.toast(f"ℹ️ Latest timestamp in PostgreSQL is: `{latest_timestamp_pg}`. Syncing data newer than this.")
+                log_to_ui(f"ℹ️ Syncing data newer than: `{latest_timestamp_pg}`.")
                 sql_cursor.execute(sql_query, latest_timestamp_pg)
                 rows = sql_cursor.fetchall()
 
-            st.toast(f"📁 Fetched {len(rows)} rows from SQL Server.")
+            log_to_ui(f"📁 Fetched {len(rows)} rows from SQL Server.")
 
             if not rows:
-                st.toast("📁 No new data found in SQL Server. Waiting...")
+                log_to_ui("📁 No new data found in SQL Server. Waiting...")
             else:
                 insert_query = f"""
                 INSERT INTO "{config['PG_TABLE_NAME']}"
@@ -220,7 +236,7 @@ def sync_continuously_correct(config, password, stop_event):
                 ON CONFLICT ON CONSTRAINT {config['PG_TABLE_NAME']}_pkey DO NOTHING;
                 """
                 
-                st.toast(f"ℹ️ Inserting {len(rows)} new row(s) into PostgreSQL.")
+                log_to_ui(f"ℹ️ Inserting {len(rows)} new row(s) into PostgreSQL.")
                 
                 psycopg2.extras.execute_values(
                     pg_cursor,
@@ -229,23 +245,23 @@ def sync_continuously_correct(config, password, stop_event):
                     page_size=100
                 )
                 pg_conn.commit()
-                st.toast(f"✅ Synced {len(rows)} new row(s) from SQL Server to PostgreSQL.")
+                log_to_ui(f"✅ Synced {len(rows)} new row(s) from SQL Server to PostgreSQL.")
 
         except pyodbc.Error as e:
-            st.toast(f"❌ SQL Server connection failed. Error: {e}")
+            log_to_ui(f"❌ SQL Server connection failed. Error: {e}", level="error")
             stop_event.set()
         except psycopg2.OperationalError as e:
-            st.toast(f"❌ PostgreSQL connection failed. Error: {e}")
+            log_to_ui(f"❌ PostgreSQL connection failed. Error: {e}", level="error")
             stop_event.set()
         except Exception as e:
-            st.toast(f"❌ A general error occurred: {e}. Stopping sync.")
+            log_to_ui(f"❌ A general error occurred: {e}. Stopping sync.", level="error")
             stop_event.set()
         finally:
             if sql_conn: sql_conn.close()
             if pg_conn: pg_conn.close()
 
         if not stop_event.is_set():
-            st.toast("💤 Waiting for 60 seconds before the next sync cycle...")
+            log_to_ui("💤 Waiting for 60 seconds before the next sync cycle...")
             stop_event.wait(60)
 
 # ==============================================================================
@@ -337,3 +353,8 @@ else:
             st.session_state.sync_thread = threading.Thread(target=sync_continuously_correct, args=(st.session_state.config, st.session_state.pg_password, st.session_state.sync_stop_event))
             st.session_state.sync_thread.start()
             st.info("⏳ Sync started...")
+
+st.markdown("---")
+st.subheader("Live Sync Log")
+log_area = st.empty()
+log_area.text_area("Log Messages", value="\n".join(st.session_state.log_messages), height=300)
