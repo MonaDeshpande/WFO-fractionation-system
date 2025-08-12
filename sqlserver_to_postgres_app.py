@@ -11,6 +11,19 @@ import re
 from psycopg2.errors import DuplicateDatabase
 
 # ==============================================================================
+# CORRECT SESSION STATE INITIALIZATION
+# This is the most important part to fix your error.
+# The `if ... not in st.session_state` check ensures these variables
+# always exist before the app tries to use them.
+# ==============================================================================
+if 'sync_running' not in st.session_state:
+    st.session_state.sync_running = False
+if 'sync_thread' not in st.session_state:
+    st.session_state.sync_thread = None
+if 'pg_password' not in st.session_state:
+    st.session_state.pg_password = None
+
+# ==============================================================================
 #  _           _           _      _
 # | |__   ___| |_ _  _ __ _| |_ ___| |__
 # | '_ \ / _ \ __| | | |/ _` | __/ __| '_ \
@@ -53,12 +66,6 @@ TAG_MAPPING = {
 #
 #  Streamlit App Layout and Logic
 # ==============================================================================
-
-# Global State for Streamlit session
-if 'sync_running' not in st.session_state:
-    st.session_state.sync_running = False
-if 'sync_thread' not in st.session_state:
-    st.session_state.sync_thread = None
 
 # Streamlit Page Config
 st.set_page_config(page_title="SCADA SQL to PostgreSQL Sync", layout="centered")
