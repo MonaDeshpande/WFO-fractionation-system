@@ -1,0 +1,46 @@
+{
+    "sql_server": {
+        "server": "DESKTOP-DG1Q26L\\SQLEXPRESS",
+        "database": "JSCPL",
+        "user": "postgres",
+        "password": "your_sql_password"
+    },
+    "postgres": {
+        "host": "your_postgres_host_address",
+        "database": "your_postgres_database_name",
+        "user": "your_postgres_username",
+        "password": "your_postgres_password"
+    },
+    "tag_mapping": {
+        "251": "TI-31",
+        "253": "TI-32",
+        "254": "TI-33",
+        "255": "TI-34",
+        "256": "TI-35",
+        "257": "TI-36",
+        "258": "TI-37",
+        "259": "TI-38",
+        "260": "TI-39",
+        "261": "TI-40",
+        "270": "TI-41",
+        "271": "TI-42",
+        "273": "TI-43",
+        "274": "TI-44",
+        "275": "TI-45",
+        "272": "TI-42A",
+        "279": "TI-54",
+        "199": "TI-107",
+        "201": "TI-109",
+        "296": "TI-73A",
+        "297": "TI-73B",
+        "280": "TI-55",
+        "154": "PTT-03",
+        "149": "PTB-03",
+        "122": "LT-05",
+        "123": "LT-06",
+        "28": "FT-01",
+        "46": "FT-07",
+        "63": "FT-10",
+        "37": "FT-04"
+    }
+}
