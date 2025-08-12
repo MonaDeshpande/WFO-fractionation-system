@@ -24,6 +24,17 @@ if 'sync_stop_event' not in st.session_state:
     st.session_state.sync_stop_event = None
 if 'pg_password' not in st.session_state:
     st.session_state.pg_password = None
+if 'config' not in st.session_state:
+    st.session_state.config = {
+        "SQL_SERVER_NAME": r"DESKTOP-DG1Q26L\SQLEXPRESS",
+        "SQL_DB_NAME": "JSCPL",
+        "SQL_TABLE_NAME": "dbo.FloatTable",
+        "PG_HOST": "localhost",
+        "PG_PORT": "5432",
+        "PG_USER": "postgres",
+        "PG_DB_NAME": "scada_data",
+        "PG_TABLE_NAME": "scada_data_raw"
+    }
 
 # ==============================================================================
 #       _               _           _   _
@@ -34,7 +45,9 @@ if 'pg_password' not in st.session_state:
 #
 # Edit these values to configure your application
 # ==============================================================================
-CONFIG = {
+# CONFIG is now handled by session state
+# A copy of the initial config is still here for reference
+DEFAULT_CONFIG = {
     "SQL_SERVER_NAME": r"DESKTOP-DG1Q26L\SQLEXPRESS",
     "SQL_DB_NAME": "JSCPL",
     "SQL_TABLE_NAME": "dbo.FloatTable",
@@ -42,11 +55,10 @@ CONFIG = {
     "PG_PORT": "5432",
     "PG_USER": "postgres",
     "PG_DB_NAME": "scada_data",
-    "PG_TABLE_NAME": "scada_data_raw" # Changed to avoid confusion with pivoted data
+    "PG_TABLE_NAME": "scada_data_raw"
 }
 
 # The dictionary of TagIndex numbers to their friendly names.
-# This mapping is now only for reference and can be used for pivoting later.
 TAG_MAPPING = {
     251: "TI-31", 253: "TI-32", 254: "TI-33", 255: "TI-35", 256: "TI-35-A",
     257: "TI-36", 258: "TI-37", 259: "TI-38", 260: "TI-39", 261: "TI-40",
@@ -70,7 +82,7 @@ TAG_MAPPING = {
 # ==============================================================================
 
 # Streamlit Page Config
-st.set_page_config(page_title="SCADA SQL to PostgreSQL Sync", layout="centered")
+st.set_page_config(page_title="SCADA SQL to PostgreSQL Sync", layout="wide")
 st.title("🔄 SCADA SQL to PostgreSQL Sync Tool")
 st.markdown("---")
 
@@ -80,17 +92,17 @@ st.markdown("---")
 st.sidebar.header("🔧 Sync Settings")
 with st.sidebar.form("connection_form"):
     st.subheader("SQL Server Details")
-    sql_server = st.text_input("SQL Server Name", value=CONFIG["SQL_SERVER_NAME"], help="The server where your SCADA data is located.")
-    sql_db_name = st.text_input("SQL Server Database Name", value=CONFIG["SQL_DB_NAME"], help="The name of the database that contains your SCADA data.")
-    sql_table_name = st.text_input("SQL Server Data Table Name", value=CONFIG["SQL_TABLE_NAME"], help="The name of the table that contains your SCADA data.")
+    sql_server = st.text_input("SQL Server Name", value=st.session_state.config["SQL_SERVER_NAME"], help="The server where your SCADA data is located.")
+    sql_db_name = st.text_input("SQL Server Database Name", value=st.session_state.config["SQL_DB_NAME"], help="The name of the database that contains your SCADA data.")
+    sql_table_name = st.text_input("SQL Server Data Table Name", value=st.session_state.config["SQL_TABLE_NAME"], help="The name of the table that contains your SCADA data.")
 
     st.subheader("PostgreSQL Details")
-    host = st.text_input("Host", value=CONFIG["PG_HOST"], help="The hostname of your PostgreSQL server.")
-    port = st.text_input("Port", value=CONFIG["PG_PORT"], help="The port for your PostgreSQL server (default is 5432).")
-    user = st.text_input("Username", value=CONFIG["PG_USER"], help="The username for PostgreSQL access.")
+    host = st.text_input("Host", value=st.session_state.config["PG_HOST"], help="The hostname of your PostgreSQL server.")
+    port = st.text_input("Port", value=st.session_state.config["PG_PORT"], help="The port for your PostgreSQL server (default is 5432).")
+    user = st.text_input("Username", value=st.session_state.config["PG_USER"], help="The username for PostgreSQL access.")
     password = st.text_input("Password", type="password", help="The password for the PostgreSQL user.")
-    db_name = st.text_input("PostgreSQL Database Name", value=CONFIG["PG_DB_NAME"], help="The name of the database to create or use.")
-    pg_table_name = st.text_input("Target Table Name", value=CONFIG["PG_TABLE_NAME"], help="The name of the table to create or use for storing the data.")
+    db_name = st.text_input("PostgreSQL Database Name", value=st.session_state.config["PG_DB_NAME"], help="The name of the database to create or use.")
+    pg_table_name = st.text_input("Target Table Name", value=st.session_state.config["PG_TABLE_NAME"], help="The name of the table to create or use for storing the data.")
 
     submitted = st.form_submit_button("✅ Save Settings and Initialize")
 
@@ -274,33 +286,65 @@ except ImportError:
 # --- DB Setup ---
 if submitted:
     st.session_state.pg_password = password
-    # The new table name is now `scada_data_raw` to store the raw data
-    CONFIG['PG_TABLE_NAME'] = pg_table_name
-    if create_database_if_not_exists(host, port, user, st.session_state.pg_password, db_name):
-        create_target_table_if_not_exists(host, port, user, st.session_state.pg_password, db_name, CONFIG['PG_TABLE_NAME'])
-    # Re-fetch config from the form for the main part of the app
-    CONFIG['SQL_SERVER_NAME'] = sql_server
-    CONFIG['SQL_DB_NAME'] = sql_db_name
-    CONFIG['SQL_TABLE_NAME'] = sql_table_name
-    CONFIG['PG_HOST'] = host
-    CONFIG['PG_PORT'] = port
-    CONFIG['PG_USER'] = user
-    CONFIG['PG_DB_NAME'] = db_name
+    # Store the form values in session state
+    st.session_state.config['SQL_SERVER_NAME'] = sql_server
+    st.session_state.config['SQL_DB_NAME'] = sql_db_name
+    st.session_state.config['SQL_TABLE_NAME'] = sql_table_name
+    st.session_state.config['PG_HOST'] = host
+    st.session_state.config['PG_PORT'] = port
+    st.session_state.config['PG_USER'] = user
+    st.session_state.config['PG_DB_NAME'] = db_name
+    st.session_state.config['PG_TABLE_NAME'] = pg_table_name
 
-# --- Data Preview ---
-st.header("🔍 SQL Server Data Preview")
-st.info("ℹ️ This is a diagnostic preview to confirm the connection and data are correct.")
-try:
-    sql_conn = pyodbc.connect(f'DRIVER={{ODBC Driver 17 for SQL Server}};SERVER={CONFIG["SQL_SERVER_NAME"]};DATABASE={CONFIG["SQL_DB_NAME"]};Trusted_Connection=yes;')
-    sql_query = f"SELECT TOP 500 DateAndTime, MilliSec, TagIndex, Val FROM {CONFIG['SQL_TABLE_NAME']} ORDER BY DateAndTime DESC, MilliSec DESC;"
-    preview_df = pd.read_sql(sql_query, sql_conn)
-    st.dataframe(preview_df)
-    sql_conn.close()
-    st.info("✅ Preview successfully fetched. The data above shows the most recent 500 rows from your SQL Server.")
-except pyodbc.Error as e:
-    st.warning(f"⚠️ Could not connect to SQL Server for preview. Check your connection details in the code and your network. Error: {e}")
-except Exception as e:
-    st.warning(f"⚠️ An unexpected error occurred while fetching data for preview. Error: {e}")
+    if create_database_if_not_exists(host, port, user, st.session_state.pg_password, db_name):
+        create_target_table_if_not_exists(host, port, user, st.session_state.pg_password, db_name, st.session_state.config['PG_TABLE_NAME'])
+
+# --- Data Preview Layout ---
+# This uses columns to put the previews side-by-side
+col1, col2 = st.columns(2)
+
+# --- SQL Server Data Preview ---
+with col1:
+    st.header("🔍 SQL Server Data Preview")
+    st.info("ℹ️ Most recent 500 rows from your SQL Server.")
+    try:
+        sql_conn = pyodbc.connect(f'DRIVER={{ODBC Driver 17 for SQL Server}};SERVER={st.session_state.config["SQL_SERVER_NAME"]};DATABASE={st.session_state.config["SQL_DB_NAME"]};Trusted_Connection=yes;')
+        sql_query = f"SELECT TOP 500 DateAndTime, MilliSec, TagIndex, Val FROM {st.session_state.config['SQL_TABLE_NAME']} ORDER BY DateAndTime DESC, MilliSec DESC;"
+        preview_df = pd.read_sql(sql_query, sql_conn)
+        st.dataframe(preview_df)
+        sql_conn.close()
+        st.success("✅ SQL Server preview successfully fetched.")
+    except pyodbc.Error as e:
+        st.warning(f"⚠️ Could not connect to SQL Server for preview. Error: {e}")
+    except Exception as e:
+        st.warning(f"⚠️ An unexpected error occurred while fetching SQL Server preview. Error: {e}")
+
+# --- PostgreSQL Data Preview ---
+with col2:
+    st.header("📋 PostgreSQL Data Preview")
+    st.info("ℹ️ Most recent 500 rows from your PostgreSQL database.")
+    try:
+        if st.session_state.pg_password is not None:
+            pg_conn = psycopg2.connect(
+                host=st.session_state.config['PG_HOST'],
+                port=st.session_state.config['PG_PORT'],
+                user=st.session_state.config['PG_USER'],
+                password=st.session_state.pg_password,
+                dbname=st.session_state.config['PG_DB_NAME']
+            )
+            pg_query = f'SELECT "DateAndTime", "MilliSec", "TagIndex", "Val" FROM "{st.session_state.config["PG_TABLE_NAME"]}" ORDER BY "DateAndTime" DESC, "MilliSec" DESC LIMIT 500;'
+            preview_df_pg = pd.read_sql(pg_query, pg_conn)
+            st.dataframe(preview_df_pg)
+            pg_conn.close()
+            st.success("✅ PostgreSQL preview successfully fetched.")
+        else:
+            st.info("Please save your settings to enable the PostgreSQL preview.")
+    except psycopg2.OperationalError as e:
+        st.warning(f"⚠️ Could not connect to PostgreSQL for preview. Check your settings or if the database/table exists. Error: {e}")
+    except Exception as e:
+        st.warning(f"⚠️ An unexpected error occurred while fetching PostgreSQL preview. Error: {e}")
+
+st.markdown("---")
 
 # --- Sync Controls ---
 if st.session_state.sync_running:
@@ -316,7 +360,6 @@ else:
         else:
             st.session_state.sync_running = True
             st.session_state.sync_stop_event = threading.Event()
-            # Pass the stop event to the thread
-            st.session_state.sync_thread = threading.Thread(target=sync_continuously_correct, args=(CONFIG, TAG_MAPPING, st.session_state.pg_password, st.session_state.sync_stop_event))
+            st.session_state.sync_thread = threading.Thread(target=sync_continuously_correct, args=(st.session_state.config, TAG_MAPPING, st.session_state.pg_password, st.session_state.sync_stop_event))
             st.session_state.sync_thread.start()
             st.info("⏳ Sync started...")
