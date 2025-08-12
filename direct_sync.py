@@ -13,9 +13,9 @@ SQL_TABLE_NAME = "dbo.FloatTable"
 PG_HOST = "localhost"
 PG_PORT = "5432"
 PG_USER = "postgres"
-PG_PASSWORD = "your_postgresql_password" # <-- IMPORTANT: Add your PostgreSQL password here
-PG_DB_NAME = "scada_data"
-PG_TABLE_NAME = "scada_data_streamlined"
+PG_PASSWORD = "ADMIN" # <-- IMPORTANT: Add your PostgreSQL password here
+PG_DB_NAME = "scada_data624"
+PG_TABLE_NAME = "scada_data_streamlined624"
 
 # ==============================================================================
 # Main Sync Logic
@@ -70,8 +70,11 @@ def run_sync():
                     VALUES (%s, %s, %s)
                     ON CONFLICT ("DateAndTime", "TagIndex") DO NOTHING;
                     """
+                    # We will now explicitly cast the 'Val' column to a string to avoid data type mismatch
+                    rows_for_insert = [(row[0], row[1], str(row[2])) for row in rows]
+                    
                     # Using executemany which is more reliable than execute_values if 'extras' is missing
-                    pg_cursor.executemany(insert_query, rows)
+                    pg_cursor.executemany(insert_query, rows_for_insert)
                     pg_conn.commit()
                     print(f"✅ Successfully inserted {pg_cursor.rowcount} row(s) into PostgreSQL.")
                 else:
