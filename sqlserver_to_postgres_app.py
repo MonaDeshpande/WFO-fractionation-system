@@ -1,6 +1,6 @@
 import streamlit as st
 import psycopg2
-import psycopg2.extras # This is the crucial new import for bulk inserts
+import psycopg2.extras  # This is the crucial new import for bulk inserts
 import os
 import pandas as pd
 import threading
@@ -26,11 +26,11 @@ if 'pg_password' not in st.session_state:
     st.session_state.pg_password = None
 
 # ==============================================================================
-#      _         _          _    _
-# | |__   ___| |_ _  _ __ _| |_ ___| |__
-# | '_ \ / _ \ __| | | |/ _` | __/ __| '_ \
-# | |_) |  __/ |_| |_| | (_| | |_\__ \ | | |
-# |_.__/ \___|\__|\__,_|\__,_|\__|___/_| |_|
+#       _               _           _   _
+#  | |__   ___| |_ _  _ __ _| |_ ___| |__
+#  | '_ \ / _ \ __| | | |/ _` | __/ __| '_ \
+#  | |_) |  __/ |_| |_| | (_| | |_\__ \ | | |
+#  |_.__/ \___|\__|\__,_|\__,_|\__|___/_| |_|
 #
 # Edit these values to configure your application
 # ==============================================================================
@@ -42,11 +42,11 @@ CONFIG = {
     "PG_PORT": "5432",
     "PG_USER": "postgres",
     "PG_DB_NAME": "scada_data",
-    "PG_TABLE_NAME": "scada_data"
+    "PG_TABLE_NAME": "scada_data_raw" # Changed to avoid confusion with pivoted data
 }
 
 # The dictionary of TagIndex numbers to their friendly names.
-# The sync process will IGNORE any tags from the SQL data that are not in this list.
+# This mapping is now only for reference and can be used for pivoting later.
 TAG_MAPPING = {
     251: "TI-31", 253: "TI-32", 254: "TI-33", 255: "TI-35", 256: "TI-35-A",
     257: "TI-36", 258: "TI-37", 259: "TI-38", 260: "TI-39", 261: "TI-40",
@@ -60,11 +60,11 @@ TAG_MAPPING = {
 }
 
 # ==============================================================================
-#      _  _        _
-# | || | __ _ _ __ | | __
-# | || |/ _` | '_ \| |/ /
-# |__  | (_| | | | |  <
-#      |_|\__,_|_| |_|_|\_\
+#       _  _         _
+#  | || | __ _ _ __ | | __
+#  | || |/ _` | '_ \| |/ /
+#  |__  | (_| | | | |  <
+#       |_|\__,_|_| |_|_|\_\
 #
 #   Streamlit App Layout and Logic
 # ==============================================================================
@@ -132,24 +132,32 @@ def create_database_if_not_exists(host, port, user, password, db_name):
         if conn:
             conn.close()
 
-def create_pivoted_table_if_not_exists(host, port, user, password, db_name, table_name):
-    """Connects to the specific database and creates the target table if it doesn't exist."""
+def create_target_table_if_not_exists(host, port, user, password, db_name, table_name):
+    """
+    Connects to the specific database and creates a target table
+    to hold the raw, non-pivoted data.
+    """
     conn = None
     try:
         conn = psycopg2.connect(host=host, port=port, user=user, password=password, dbname=db_name)
         cursor = conn.cursor()
-        # Create columns with double quotes to handle non-standard characters and preserve case
-        columns = ",\n".join([f'"{tag}" FLOAT' for tag in TAG_MAPPING.values()])
+
+        # CRITICAL FIX: The table schema is now for the raw data, not a pivoted one.
         create_query = f"""
         CREATE TABLE IF NOT EXISTS "{table_name}" (
-            "DateAndTime" TIMESTAMP PRIMARY KEY,
-            {columns}
+            "DateAndTime" TIMESTAMP NOT NULL,
+            "MilliSec" INTEGER NOT NULL,
+            "TagIndex" INTEGER NOT NULL,
+            "Val" FLOAT,
+            "Status" VARCHAR(10),
+            "Marker" VARCHAR(10),
+            PRIMARY KEY ("DateAndTime", "MilliSec", "TagIndex") -- Composite key for uniqueness
         );
         """
-        st.info(f"ℹ️ Attempting to create table `{table_name}`...")
+        st.info(f"ℹ️ Attempting to create raw data table `{table_name}`...")
         cursor.execute(create_query)
         conn.commit()
-        st.success(f"✅ Table `{table_name}` verified/created successfully.")
+        st.success(f"✅ Raw data table `{table_name}` verified/created successfully.")
         return True
     except psycopg2.OperationalError as e:
         st.error(f"❌ Could not connect to database `{db_name}` to create the table. Please verify the database exists and your credentials are correct. Error: {e}")
@@ -182,27 +190,30 @@ def sync_continuously_correct(config, tag_mapping, password, stop_event):
             pg_conn = psycopg2.connect(host=config['PG_HOST'], port=config['PG_PORT'], user=config['PG_USER'], password=password, dbname=config['PG_DB_NAME'])
             pg_cursor = pg_conn.cursor()
 
-            pg_cursor.execute(f'SELECT MAX("DateAndTime") FROM "{config["PG_TABLE_NAME"]}";')
-            latest_timestamp_pg = pg_cursor.fetchone()[0]
+            # We need to find the latest DateAndTime AND MilliSec to avoid duplicates
+            pg_cursor.execute(f'SELECT "DateAndTime", "MilliSec" FROM "{config["PG_TABLE_NAME"]}" ORDER BY "DateAndTime" DESC, "MilliSec" DESC LIMIT 1;')
+            result = pg_cursor.fetchone()
+            latest_timestamp_pg = result[0] if result else None
+            latest_millisec_pg = result[1] if result else None
 
             if latest_timestamp_pg is None:
                 sql_query = f"""
-                SELECT DateAndTime, TagIndex, Val
+                SELECT "DateAndTime", "MilliSec", "TagIndex", "Val", "Status", "Marker"
                 FROM {config['SQL_TABLE_NAME']}
-                ORDER BY DateAndTime ASC;
+                ORDER BY "DateAndTime" ASC, "MilliSec" ASC;
                 """
                 st.toast("⚠️ Destination table is empty. Performing an initial sync.")
                 sql_cursor.execute(sql_query)
                 rows = sql_cursor.fetchall()
             else:
                 sql_query = f"""
-                SELECT DateAndTime, TagIndex, Val
+                SELECT "DateAndTime", "MilliSec", "TagIndex", "Val", "Status", "Marker"
                 FROM {config['SQL_TABLE_NAME']}
-                WHERE DateAndTime > ?
-                ORDER BY DateAndTime ASC;
+                WHERE ("DateAndTime" > ?) OR ("DateAndTime" = ? AND "MilliSec" > ?)
+                ORDER BY "DateAndTime" ASC, "MilliSec" ASC;
                 """
                 st.toast(f"ℹ️ Latest timestamp in PostgreSQL is: `{latest_timestamp_pg}`. Syncing data newer than this.")
-                sql_cursor.execute(sql_query, latest_timestamp_pg)
+                sql_cursor.execute(sql_query, latest_timestamp_pg, latest_timestamp_pg, latest_millisec_pg)
                 rows = sql_cursor.fetchall()
 
             st.toast(f"📁 Fetched {len(rows)} rows from SQL Server.")
@@ -210,44 +221,26 @@ def sync_continuously_correct(config, tag_mapping, password, stop_event):
             if not rows:
                 st.toast("📁 No new data found in SQL Server. Waiting...")
             else:
-                # Step 3: Process and Filter the new data
-                df = pd.DataFrame(rows, columns=["DateAndTime", "TagIndex", "Val"])
-                df["TAG"] = df["TagIndex"].map(tag_mapping)
-                df.dropna(subset=["TAG"], inplace=True)
-                # CRITICAL FIX: Ensure 'DateAndTime' is not null after the initial filter
-                df.dropna(subset=["DateAndTime"], inplace=True)
-
-                rows_after_filter = len(df)
-                st.toast(f"ℹ️ Filtered down to {rows_after_filter} rows.")
-
-                if rows_after_filter == 0:
-                    st.toast("⚠️ No data found with matching tags or valid timestamps to insert. All fetched rows were ignored.")
-                else:
-                    # Pivot the data to a wide format
-                    pivot_df = df.pivot_table(index="DateAndTime", columns="TAG", values="Val", aggfunc='first').reset_index()
-                    # CRITICAL FIX: Ensure 'DateAndTime' is not null after the pivot, as it could become null
-                    # if the pivot operation somehow results in a row with a null timestamp.
-                    pivot_df.dropna(subset=["DateAndTime"], inplace=True)
-
-                    # Step 4: Bulk insert new data into PostgreSQL
-                    st.toast(f"ℹ️ Inserting {len(pivot_df)} new row(s) into PostgreSQL.")
-
-                    # Ensure columns are in the correct order for the insert
-                    pg_columns = ['"DateAndTime"'] + [f'"{col}"' for col in pivot_df.columns if col != 'DateAndTime']
-                    values_to_insert = [tuple(row) for row in pivot_df.to_numpy()]
-
-                    insert_query = f'INSERT INTO "{config["PG_TABLE_NAME"]}" ({", ".join(pg_columns)}) VALUES %s ON CONFLICT ("DateAndTime") DO NOTHING;'
-
-                    psycopg2.extras.execute_values(
-                        pg_cursor,
-                        insert_query,
-                        values_to_insert,
-                        template=None,
-                        page_size=100
-                    )
-
-                    pg_conn.commit()
-                    st.toast(f"✅ Synced {pg_cursor.rowcount} new row(s) from SQL Server to PostgreSQL.")
+                # CRITICAL FIX: We are no longer pivoting the data here.
+                # We simply insert the raw rows directly.
+                insert_query = f"""
+                INSERT INTO "{config['PG_TABLE_NAME']}"
+                ("DateAndTime", "MilliSec", "TagIndex", "Val", "Status", "Marker")
+                VALUES (%s, %s, %s, %s, %s, %s)
+                ON CONFLICT ON CONSTRAINT {config['PG_TABLE_NAME']}_pkey DO NOTHING;
+                """
+                
+                st.toast(f"ℹ️ Inserting {len(rows)} new row(s) into PostgreSQL.")
+                
+                # Using execute_values for efficient bulk insertion
+                psycopg2.extras.execute_values(
+                    pg_cursor,
+                    insert_query,
+                    rows,
+                    page_size=100
+                )
+                pg_conn.commit()
+                st.toast(f"✅ Synced {len(rows)} new row(s) from SQL Server to PostgreSQL.")
 
         except pyodbc.Error as e:
             st.toast(f"❌ SQL Server connection failed. Error: {e}")
@@ -257,6 +250,7 @@ def sync_continuously_correct(config, tag_mapping, password, stop_event):
             stop_event.set()
         except Exception as e:
             st.toast(f"❌ A general error occurred: {e}. Stopping sync.")
+            # st.exception(e) # This is helpful for debugging
             stop_event.set()
         finally:
             if sql_conn: sql_conn.close()
@@ -280,8 +274,10 @@ except ImportError:
 # --- DB Setup ---
 if submitted:
     st.session_state.pg_password = password
+    # The new table name is now `scada_data_raw` to store the raw data
+    CONFIG['PG_TABLE_NAME'] = pg_table_name
     if create_database_if_not_exists(host, port, user, st.session_state.pg_password, db_name):
-        create_pivoted_table_if_not_exists(host, port, user, st.session_state.pg_password, db_name, pg_table_name)
+        create_target_table_if_not_exists(host, port, user, st.session_state.pg_password, db_name, CONFIG['PG_TABLE_NAME'])
     # Re-fetch config from the form for the main part of the app
     CONFIG['SQL_SERVER_NAME'] = sql_server
     CONFIG['SQL_DB_NAME'] = sql_db_name
@@ -290,15 +286,13 @@ if submitted:
     CONFIG['PG_PORT'] = port
     CONFIG['PG_USER'] = user
     CONFIG['PG_DB_NAME'] = db_name
-    CONFIG['PG_TABLE_NAME'] = pg_table_name
-
 
 # --- Data Preview ---
 st.header("🔍 SQL Server Data Preview")
 st.info("ℹ️ This is a diagnostic preview to confirm the connection and data are correct.")
 try:
     sql_conn = pyodbc.connect(f'DRIVER={{ODBC Driver 17 for SQL Server}};SERVER={CONFIG["SQL_SERVER_NAME"]};DATABASE={CONFIG["SQL_DB_NAME"]};Trusted_Connection=yes;')
-    sql_query = f"SELECT TOP 500 DateAndTime, TagIndex, Val FROM {CONFIG['SQL_TABLE_NAME']} ORDER BY DateAndTime DESC;"
+    sql_query = f"SELECT TOP 500 DateAndTime, MilliSec, TagIndex, Val FROM {CONFIG['SQL_TABLE_NAME']} ORDER BY DateAndTime DESC, MilliSec DESC;"
     preview_df = pd.read_sql(sql_query, sql_conn)
     st.dataframe(preview_df)
     sql_conn.close()
