@@ -175,7 +175,7 @@ def sync_continuously(config, tag_mapping, password):
             pg_cursor = pg_conn.cursor()
             
             # Use double quotes for the table name for robustness
-            pg_cursor.execute(f'SELECT MAX("DateAndTime") FROM "{config["PG_TABLE_NAME']}";')
+            pg_cursor.execute(f"SELECT MAX('DateTime') FROM {config['PG_TABLE_NAME']};")
             latest_timestamp_pg = pg_cursor.fetchone()[0]
 
             # --- CORRECTION: Handle initial sync correctly ---
