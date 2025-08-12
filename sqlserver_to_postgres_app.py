@@ -11,7 +11,7 @@ from psycopg2.errors import DuplicateDatabase
 from psycopg2 import extras # Import the extras module for bulk inserts
 
 # ==============================================================================
-#  _           _           _      _
+#   _           _          _     _
 # | |__   ___| |_ _  _ __ _| |_ ___| |__
 # | '_ \ / _ \ __| | | |/ _` | __/ __| '_ \
 # | |_) |  __/ |_| |_| | (_| | |_\__ \ | | |
@@ -179,7 +179,7 @@ def sync_continuously(config, tag_mapping, password):
             if latest_timestamp_pg is None:
                 # If the PostgreSQL table is empty, get the latest timestamp from the source
                 st.info("⚠️ Destination table is empty. Fetching the latest timestamp from SQL Server for the initial sync.")
-                sql_cursor.execute(f"SELECT MAX(DateAndTime) FROM \"{config['SQL_TABLE_NAME']}\";")
+                sql_cursor.execute(f"SELECT MAX(DateAndTime) FROM [{config['SQL_TABLE_NAME']}];")
                 latest_timestamp_sql = sql_cursor.fetchone()[0]
                 sync_start_timestamp = latest_timestamp_sql
             else:
@@ -189,7 +189,7 @@ def sync_continuously(config, tag_mapping, password):
             # Step 3: Query SQL Server for new data
             sql_query = f"""
             SELECT DateAndTime, TagIndex, Val
-            FROM \"{config['SQL_TABLE_NAME']}\"
+            FROM [{config['SQL_TABLE_NAME']}]
             WHERE DateAndTime > ?
             ORDER BY DateAndTime ASC;
             """
@@ -280,7 +280,8 @@ st.header("🔍 SQL Server Data Preview")
 st.info("ℹ️ This is a diagnostic preview to confirm the connection and data are correct.")
 try:
     sql_conn = pyodbc.connect(f'DRIVER={{ODBC Driver 17 for SQL Server}};SERVER={CONFIG["SQL_SERVER_NAME"]};DATABASE={CONFIG["SQL_DB_NAME"]};Trusted_Connection=yes;')
-    sql_query = f"SELECT TOP 500 DateAndTime, TagIndex, Val FROM \"{CONFIG['SQL_TABLE_NAME']}\" ORDER BY DateAndTime DESC;"
+    # Corrected SQL query with square brackets
+    sql_query = f"SELECT TOP 500 DateAndTime, TagIndex, Val FROM [{CONFIG['SQL_TABLE_NAME']}] ORDER BY DateAndTime DESC;"
     preview_df = pd.read_sql(sql_query, sql_conn)
     st.dataframe(preview_df)
     sql_conn.close()
