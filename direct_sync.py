@@ -13,7 +13,7 @@ SQL_TABLE_NAME = "dbo.FloatTable"
 PG_HOST = "localhost"
 PG_PORT = "5432"
 PG_USER = "postgres"
-PG_PASSWORD = "ADMIN" # <-- IMPORTANT: Add your PostgreSQL password here
+PG_PASSWORD = "your_postgresql_password" # <-- IMPORTANT: Add your PostgreSQL password here
 PG_DB_NAME = "scada_data"
 PG_TABLE_NAME = "scada_data_streamlined"
 
@@ -70,7 +70,8 @@ def run_sync():
                     VALUES (%s, %s, %s)
                     ON CONFLICT ("DateAndTime", "TagIndex") DO NOTHING;
                     """
-                    psycopg2.extras.execute_values(pg_cursor, insert_query, rows, page_size=100)
+                    # Using executemany which is more reliable than execute_values if 'extras' is missing
+                    pg_cursor.executemany(insert_query, rows)
                     pg_conn.commit()
                     print(f"✅ Successfully inserted {pg_cursor.rowcount} row(s) into PostgreSQL.")
                 else:
