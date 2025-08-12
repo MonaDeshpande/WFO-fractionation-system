@@ -163,16 +163,15 @@ def create_pivoted_table_if_not_exists(host, port, user, password, db_name, tabl
             conn.close()
 
 # ---------------------------
-# Correct Sync Function (THREAD-SAFE)
+# Correct Sync Function (THREAD-SAFE and Robust)
 # ---------------------------
 def sync_continuously_correct(config, tag_mapping, password, stop_event):
-    """The main continuous sync loop, now thread-safe."""
+    """The main continuous sync loop, now thread-safe and more robust."""
     while not stop_event.is_set():
         sql_conn, pg_conn = None, None
         try:
             # Step 1: Connect to SQL Server
             conn_str = f'DRIVER={{ODBC Driver 17 for SQL Server}};SERVER={config["SQL_SERVER_NAME"]};DATABASE={config["SQL_DB_NAME"]};Trusted_Connection=yes;'
-            # Use st.toast or st.write for in-thread logging, not st.info/success
             st.toast("ℹ️ Connecting to SQL Server...")
             sql_conn = pyodbc.connect(conn_str)
             st.toast(f"✅ Connected to SQL Server at `{config['SQL_SERVER_NAME']}`.")
@@ -215,23 +214,29 @@ def sync_continuously_correct(config, tag_mapping, password, stop_event):
                 df = pd.DataFrame(rows, columns=["DateAndTime", "TagIndex", "Val"])
                 df["TAG"] = df["TagIndex"].map(tag_mapping)
                 df.dropna(subset=["TAG"], inplace=True)
+                # CRITICAL FIX: Ensure 'DateAndTime' is not null after the initial filter
+                df.dropna(subset=["DateAndTime"], inplace=True)
 
                 rows_after_filter = len(df)
                 st.toast(f"ℹ️ Filtered down to {rows_after_filter} rows.")
 
                 if rows_after_filter == 0:
-                    st.toast("⚠️ No data found with matching tags to insert. All fetched rows were ignored.")
+                    st.toast("⚠️ No data found with matching tags or valid timestamps to insert. All fetched rows were ignored.")
                 else:
                     # Pivot the data to a wide format
                     pivot_df = df.pivot_table(index="DateAndTime", columns="TAG", values="Val", aggfunc='first').reset_index()
+                    # CRITICAL FIX: Ensure 'DateAndTime' is not null after the pivot, as it could become null
+                    # if the pivot operation somehow results in a row with a null timestamp.
+                    pivot_df.dropna(subset=["DateAndTime"], inplace=True)
 
                     # Step 4: Bulk insert new data into PostgreSQL
                     st.toast(f"ℹ️ Inserting {len(pivot_df)} new row(s) into PostgreSQL.")
 
-                    columns = ['"DateAndTime"'] + [f'"{col}"' for col in pivot_df.columns if col != 'DateAndTime']
+                    # Ensure columns are in the correct order for the insert
+                    pg_columns = ['"DateAndTime"'] + [f'"{col}"' for col in pivot_df.columns if col != 'DateAndTime']
                     values_to_insert = [tuple(row) for row in pivot_df.to_numpy()]
 
-                    insert_query = f'INSERT INTO "{config["PG_TABLE_NAME"]}" ({", ".join(columns)}) VALUES %s ON CONFLICT ("DateAndTime") DO NOTHING;'
+                    insert_query = f'INSERT INTO "{config["PG_TABLE_NAME"]}" ({", ".join(pg_columns)}) VALUES %s ON CONFLICT ("DateAndTime") DO NOTHING;'
 
                     psycopg2.extras.execute_values(
                         pg_cursor,
@@ -246,21 +251,20 @@ def sync_continuously_correct(config, tag_mapping, password, stop_event):
 
         except pyodbc.Error as e:
             st.toast(f"❌ SQL Server connection failed. Error: {e}")
-            stop_event.set() # Set the event to stop the thread on error
+            stop_event.set()
         except psycopg2.OperationalError as e:
             st.toast(f"❌ PostgreSQL connection failed. Error: {e}")
-            stop_event.set() # Set the event to stop the thread on error
+            stop_event.set()
         except Exception as e:
             st.toast(f"❌ A general error occurred: {e}. Stopping sync.")
-            stop_event.set() # Set the event to stop the thread on error
+            stop_event.set()
         finally:
             if sql_conn: sql_conn.close()
             if pg_conn: pg_conn.close()
 
-        # The thread should check the event periodically
         if not stop_event.is_set():
             st.toast("💤 Waiting for 60 seconds before the next sync cycle...")
-            stop_event.wait(60) # This waits but also allows an immediate stop if the event is set
+            stop_event.wait(60)
 
 # ==============================================================================
 # Main App Flow
