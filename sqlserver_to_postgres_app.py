@@ -175,35 +175,38 @@ def sync_continuously(config, tag_mapping, password):
             pg_cursor = pg_conn.cursor()
             
             # Use double quotes for the table name for robustness
-            pg_cursor.execute(f'SELECT MAX("DateAndTime") FROM "{config["PG_TABLE_NAME"]}";')
+            pg_cursor.execute(f'SELECT MAX("DateAndTime") FROM "{config["PG_TABLE_NAME']}";')
             latest_timestamp_pg = pg_cursor.fetchone()[0]
 
-            sync_start_timestamp = None
+            # --- CORRECTION: Handle initial sync correctly ---
             if latest_timestamp_pg is None:
-                st.info("⚠️ Destination table is empty. Fetching the latest timestamp from SQL Server for the initial sync.")
-                sql_cursor.execute(f"SELECT MAX(DateAndTime) FROM {config['SQL_TABLE_NAME']};")
-                latest_timestamp_sql = sql_cursor.fetchone()[0]
-                sync_start_timestamp = latest_timestamp_sql
+                # If the PostgreSQL table is empty, we must fetch ALL data from SQL Server.
+                sql_query = f"""
+                SELECT DateAndTime, TagIndex, Val
+                FROM {config['SQL_TABLE_NAME']}
+                ORDER BY DateAndTime ASC;
+                """
+                st.info("⚠️ Destination table is empty. Performing an initial sync of all data from SQL Server.")
+                sql_cursor.execute(sql_query)
+                rows = sql_cursor.fetchall()
             else:
+                # If PostgreSQL has data, we fetch new data since the last sync.
+                sql_query = f"""
+                SELECT DateAndTime, TagIndex, Val
+                FROM {config['SQL_TABLE_NAME']}
+                WHERE DateAndTime > ?
+                ORDER BY DateAndTime ASC;
+                """
                 st.info(f"ℹ️ Latest timestamp in PostgreSQL is: `{latest_timestamp_pg}`. Syncing data newer than this.")
-                sync_start_timestamp = latest_timestamp_pg
+                sql_cursor.execute(sql_query, latest_timestamp_pg)
+                rows = sql_cursor.fetchall()
 
-            # Step 3: Query SQL Server for new data
-            sql_query = f"""
-            SELECT DateAndTime, TagIndex, Val
-            FROM {config['SQL_TABLE_NAME']}
-            WHERE DateAndTime > ?
-            ORDER BY DateAndTime ASC;
-            """
-            st.info(f"ℹ️ Fetching new data from SQL Server (rows newer than `{sync_start_timestamp}`).")
-            sql_cursor.execute(sql_query, sync_start_timestamp)
-            rows = sql_cursor.fetchall()
             st.info(f"📁 Fetched {len(rows)} rows from SQL Server. Now filtering for relevant tags.")
 
             if not rows:
                 st.info("📁 No new data found in SQL Server. Waiting for new data...")
             else:
-                # Step 4: Process and Filter the new data
+                # Step 3: Process and Filter the new data
                 df = pd.DataFrame(rows, columns=["DateAndTime", "TagIndex", "Val"])
                 df["TAG"] = df["TagIndex"].map(tag_mapping)
                 df.dropna(subset=["TAG"], inplace=True)
@@ -217,7 +220,7 @@ def sync_continuously(config, tag_mapping, password):
                     # Pivot the data to a wide format
                     pivot_df = df.pivot_table(index="DateAndTime", columns="TAG", values="Val", aggfunc='first').reset_index()
 
-                    # Step 5: Bulk insert new data into PostgreSQL
+                    # Step 4: Bulk insert new data into PostgreSQL
                     st.info(f"ℹ️ Inserting {len(pivot_df)} new row(s) into PostgreSQL.")
                     
                     # Prepare data for bulk insert
