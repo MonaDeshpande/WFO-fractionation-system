@@ -20,14 +20,16 @@ if 'sync_running' not in st.session_state:
     st.session_state.sync_running = False
 if 'sync_thread' not in st.session_state:
     st.session_state.sync_thread = None
+if 'sync_stop_event' not in st.session_state:
+    st.session_state.sync_stop_event = None
 if 'pg_password' not in st.session_state:
     st.session_state.pg_password = None
 
 # ==============================================================================
-#  _           _           _      _
-# | |__   ___| |_ _  _ __ _| |_ ___| |__
+#      _         _          _    _
+# | |__   ___| |_ _  _ __ _| |_ ___| |__
 # | '_ \ / _ \ __| | | |/ _` | __/ __| '_ \
-# | |_) |  __/ |_| |_| | (_| | |_\__ \ | | |
+# | |_) |  __/ |_| |_| | (_| | |_\__ \ | | |
 # |_.__/ \___|\__|\__,_|\__,_|\__|___/_| |_|
 #
 # Edit these values to configure your application
@@ -58,13 +60,13 @@ TAG_MAPPING = {
 }
 
 # ==============================================================================
-#  _  _           _
+#      _  _        _
 # | || | __ _ _ __ | | __
 # | || |/ _` | '_ \| |/ /
-# |__  | (_| | | | |  <
-#   |_|\__,_|_| |_|_|\_\
+# |__  | (_| | | | |  <
+#      |_|\__,_|_| |_|_|\_\
 #
-#  Streamlit App Layout and Logic
+#   Streamlit App Layout and Logic
 # ==============================================================================
 
 # Streamlit Page Config
@@ -104,7 +106,7 @@ def create_database_if_not_exists(host, port, user, password, db_name):
     if not _is_valid_db_name(db_name):
         st.error(f"❌ Invalid PostgreSQL database name: `{db_name}`. Please use a simple name with only letters, numbers, and underscores (e.g., `scada_db`).")
         return False
-    
+
     conn = None
     try:
         conn = psycopg2.connect(host=host, port=port, user=user, password=password, dbname="postgres")
@@ -116,7 +118,7 @@ def create_database_if_not_exists(host, port, user, password, db_name):
         cursor.execute(create_query)
         st.success(f"✅ PostgreSQL database `{db_name}` created successfully.")
         return True
-    
+
     except DuplicateDatabase:
         st.info(f"ℹ️ PostgreSQL database `{db_name}` already exists. Skipping creation.")
         return True
@@ -160,83 +162,77 @@ def create_pivoted_table_if_not_exists(host, port, user, password, db_name, tabl
             cursor.close()
             conn.close()
 
-
 # ---------------------------
-# Sync Function (Diagnostic Mode)
+# Correct Sync Function (THREAD-SAFE)
 # ---------------------------
-def sync_continuously(config, tag_mapping, password):
-    """The main continuous sync loop, now with bulk insertion."""
-    while st.session_state.sync_running:
+def sync_continuously_correct(config, tag_mapping, password, stop_event):
+    """The main continuous sync loop, now thread-safe."""
+    while not stop_event.is_set():
         sql_conn, pg_conn = None, None
         try:
             # Step 1: Connect to SQL Server
             conn_str = f'DRIVER={{ODBC Driver 17 for SQL Server}};SERVER={config["SQL_SERVER_NAME"]};DATABASE={config["SQL_DB_NAME"]};Trusted_Connection=yes;'
-            st.info("ℹ️ Connecting to SQL Server...")
+            # Use st.toast or st.write for in-thread logging, not st.info/success
+            st.toast("ℹ️ Connecting to SQL Server...")
             sql_conn = pyodbc.connect(conn_str)
-            st.success(f"✅ Connected to SQL Server at `{config['SQL_SERVER_NAME']}`.")
+            st.toast(f"✅ Connected to SQL Server at `{config['SQL_SERVER_NAME']}`.")
             sql_cursor = sql_conn.cursor()
 
             # Step 2: Determine the synchronization start timestamp
-            st.info("ℹ️ Connecting to PostgreSQL to get the latest timestamp...")
+            st.toast("ℹ️ Connecting to PostgreSQL to get the latest timestamp...")
             pg_conn = psycopg2.connect(host=config['PG_HOST'], port=config['PG_PORT'], user=config['PG_USER'], password=password, dbname=config['PG_DB_NAME'])
             pg_cursor = pg_conn.cursor()
-            
-            # Use double quotes for the table name for robustness
-            pg_cursor.execute(f"SELECT MAX('DateTime') FROM {config['PG_TABLE_NAME']};")
+
+            pg_cursor.execute(f'SELECT MAX("DateAndTime") FROM "{config["PG_TABLE_NAME"]}";')
             latest_timestamp_pg = pg_cursor.fetchone()[0]
 
-            # --- CORRECTION: Handle initial sync correctly ---
             if latest_timestamp_pg is None:
-                # If the PostgreSQL table is empty, we must fetch ALL data from SQL Server.
                 sql_query = f"""
                 SELECT DateAndTime, TagIndex, Val
                 FROM {config['SQL_TABLE_NAME']}
                 ORDER BY DateAndTime ASC;
                 """
-                st.info("⚠️ Destination table is empty. Performing an initial sync of all data from SQL Server.")
+                st.toast("⚠️ Destination table is empty. Performing an initial sync.")
                 sql_cursor.execute(sql_query)
                 rows = sql_cursor.fetchall()
             else:
-                # If PostgreSQL has data, we fetch new data since the last sync.
                 sql_query = f"""
                 SELECT DateAndTime, TagIndex, Val
                 FROM {config['SQL_TABLE_NAME']}
                 WHERE DateAndTime > ?
                 ORDER BY DateAndTime ASC;
                 """
-                st.info(f"ℹ️ Latest timestamp in PostgreSQL is: `{latest_timestamp_pg}`. Syncing data newer than this.")
+                st.toast(f"ℹ️ Latest timestamp in PostgreSQL is: `{latest_timestamp_pg}`. Syncing data newer than this.")
                 sql_cursor.execute(sql_query, latest_timestamp_pg)
                 rows = sql_cursor.fetchall()
 
-            st.info(f"📁 Fetched {len(rows)} rows from SQL Server. Now filtering for relevant tags.")
+            st.toast(f"📁 Fetched {len(rows)} rows from SQL Server.")
 
             if not rows:
-                st.info("📁 No new data found in SQL Server. Waiting for new data...")
+                st.toast("📁 No new data found in SQL Server. Waiting...")
             else:
                 # Step 3: Process and Filter the new data
                 df = pd.DataFrame(rows, columns=["DateAndTime", "TagIndex", "Val"])
                 df["TAG"] = df["TagIndex"].map(tag_mapping)
                 df.dropna(subset=["TAG"], inplace=True)
-                
+
                 rows_after_filter = len(df)
-                st.info(f"ℹ️ Filtered down to {rows_after_filter} rows after applying tag mapping. Now pivoting the data.")
+                st.toast(f"ℹ️ Filtered down to {rows_after_filter} rows.")
 
                 if rows_after_filter == 0:
-                    st.warning("⚠️ No data found with matching tags to insert. All fetched rows were ignored.")
+                    st.toast("⚠️ No data found with matching tags to insert. All fetched rows were ignored.")
                 else:
                     # Pivot the data to a wide format
                     pivot_df = df.pivot_table(index="DateAndTime", columns="TAG", values="Val", aggfunc='first').reset_index()
 
                     # Step 4: Bulk insert new data into PostgreSQL
-                    st.info(f"ℹ️ Inserting {len(pivot_df)} new row(s) into PostgreSQL.")
-                    
-                    # Prepare data for bulk insert
+                    st.toast(f"ℹ️ Inserting {len(pivot_df)} new row(s) into PostgreSQL.")
+
                     columns = ['"DateAndTime"'] + [f'"{col}"' for col in pivot_df.columns if col != 'DateAndTime']
                     values_to_insert = [tuple(row) for row in pivot_df.to_numpy()]
-                    
-                    # Use execute_values for efficient and safe bulk insertion
-                    insert_query = f"INSERT INTO \"{config['PG_TABLE_NAME']}\" ({', '.join(columns)}) VALUES %s ON CONFLICT (\"DateAndTime\") DO NOTHING;"
-                    
+
+                    insert_query = f'INSERT INTO "{config["PG_TABLE_NAME"]}" ({", ".join(columns)}) VALUES %s ON CONFLICT ("DateAndTime") DO NOTHING;'
+
                     psycopg2.extras.execute_values(
                         pg_cursor,
                         insert_query,
@@ -244,26 +240,27 @@ def sync_continuously(config, tag_mapping, password):
                         template=None,
                         page_size=100
                     )
-                    
+
                     pg_conn.commit()
-                    st.success(f"✅ Synced {pg_cursor.rowcount} new row(s) from SQL Server to PostgreSQL.")
-        
+                    st.toast(f"✅ Synced {pg_cursor.rowcount} new row(s) from SQL Server to PostgreSQL.")
+
         except pyodbc.Error as e:
-            st.error(f"❌ SQL Server connection failed. Check your server name, database, and network connectivity. Error: {e}")
-            st.session_state.sync_running = False
+            st.toast(f"❌ SQL Server connection failed. Error: {e}")
+            stop_event.set() # Set the event to stop the thread on error
         except psycopg2.OperationalError as e:
-            st.error(f"❌ PostgreSQL connection failed. Check your credentials and that the service is running. Error: {e}")
-            st.session_state.sync_running = False
+            st.toast(f"❌ PostgreSQL connection failed. Error: {e}")
+            stop_event.set() # Set the event to stop the thread on error
         except Exception as e:
-            st.error(f"❌ A general error occurred: {e}. Stopping sync.")
-            st.session_state.sync_running = False
+            st.toast(f"❌ A general error occurred: {e}. Stopping sync.")
+            stop_event.set() # Set the event to stop the thread on error
         finally:
             if sql_conn: sql_conn.close()
             if pg_conn: pg_conn.close()
 
-        if st.session_state.sync_running:
-            st.info("💤 Waiting for 60 seconds before the next sync cycle...")
-            time.sleep(60)
+        # The thread should check the event periodically
+        if not stop_event.is_set():
+            st.toast("💤 Waiting for 60 seconds before the next sync cycle...")
+            stop_event.wait(60) # This waits but also allows an immediate stop if the event is set
 
 # ==============================================================================
 # Main App Flow
@@ -290,7 +287,7 @@ if submitted:
     CONFIG['PG_USER'] = user
     CONFIG['PG_DB_NAME'] = db_name
     CONFIG['PG_TABLE_NAME'] = pg_table_name
-    
+
 
 # --- Data Preview ---
 st.header("🔍 SQL Server Data Preview")
@@ -308,15 +305,20 @@ except Exception as e:
     st.warning(f"⚠️ An unexpected error occurred while fetching data for preview. Error: {e}")
 
 # --- Sync Controls ---
-if st.button("🚀 Start Sync") and not st.session_state.sync_running:
-    if not 'pg_password' in st.session_state:
-        st.error("❌ Please enter your settings and click 'Save Settings' before starting the sync.")
-    else:
-        st.session_state.sync_running = True
-        st.session_state.sync_thread = threading.Thread(target=sync_continuously, args=(CONFIG, TAG_MAPPING, st.session_state.pg_password))
-        st.session_state.sync_thread.start()
-        st.info("⏳ Sync started...")
-
-if st.button("🛑 Stop Sync") and st.session_state.sync_running:
-    st.session_state.sync_running = False
-    st.warning("🛑 Sync stopped.")
+if st.session_state.sync_running:
+    if st.button("🛑 Stop Sync"):
+        st.session_state.sync_running = False
+        if st.session_state.sync_stop_event:
+            st.session_state.sync_stop_event.set()
+        st.warning("🛑 Sync stopping...")
+else:
+    if st.button("🚀 Start Sync"):
+        if 'pg_password' not in st.session_state or st.session_state.pg_password is None:
+            st.error("❌ Please enter your settings and click 'Save Settings' before starting the sync.")
+        else:
+            st.session_state.sync_running = True
+            st.session_state.sync_stop_event = threading.Event()
+            # Pass the stop event to the thread
+            st.session_state.sync_thread = threading.Thread(target=sync_continuously_correct, args=(CONFIG, TAG_MAPPING, st.session_state.pg_password, st.session_state.sync_stop_event))
+            st.session_state.sync_thread.start()
+            st.info("⏳ Sync started...")
