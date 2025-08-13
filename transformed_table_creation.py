@@ -12,23 +12,24 @@ PG_PASSWORD = "ADMIN"  # <-- IMPORTANT: Add your PostgreSQL password here
 PG_DB_NAME = "scada_data_analysis"
 PG_RAW_TABLE = "raw_data"
 PG_MAPPING_TABLE = "tag_mapping"
-PG_TRANSFORMED_TABLE = "wide_scada_data"  # This is now a physical table
+PG_TRANSFORMED_TABLE = "wide_scada_data"
 TAGS_CSV_FILE = "tags.csv"
 
-def create_and_populate_physical_table():
+def refresh_minute_data_table():
     """
-    Connects to PostgreSQL, creates the tag mapping table, populates it from a CSV,
-    and then creates a new physical table with the pivoted data.
+    Connects to PostgreSQL, ensures tables exist, and populates it with
+    minute-aggregated data. It assumes the table is either new or has been
+    cleared by a separate process.
     """
     pg_conn = None
     try:
-        print("Connecting to PostgreSQL to create and populate database objects...")
+        print("Connecting to PostgreSQL to refresh database objects...")
         pg_conn = psycopg2.connect(host=PG_HOST, port=PG_PORT, user=PG_USER, password=PG_PASSWORD, dbname=PG_DB_NAME)
         pg_cursor = pg_conn.cursor()
         print("✅ Successfully connected to PostgreSQL.")
 
-        # --- Step 1: Create the Tag Mapping Table ---
-        print(f"\n--- Creating mapping table '{PG_MAPPING_TABLE}' ---")
+        # --- Step 1: Create the Tag Mapping Table if it doesn't exist ---
+        print(f"\n--- Creating mapping table '{PG_MAPPING_TABLE}' if it doesn't exist ---")
         create_mapping_table_query = f"""
         CREATE TABLE IF NOT EXISTS "{PG_MAPPING_TABLE}" (
             "TagIndex" INTEGER PRIMARY KEY,
@@ -62,27 +63,35 @@ def create_and_populate_physical_table():
         pg_conn.commit()
         print(f"✅ Successfully inserted/updated {pg_cursor.rowcount} tags.")
         
-        # --- Step 3: Drop the existing transformed table if it exists ---
-        print(f"\n--- Dropping existing table '{PG_TRANSFORMED_TABLE}' if it exists ---")
-        drop_table_query = f"""
-        DROP TABLE IF EXISTS "{PG_TRANSFORMED_TABLE}";
+        # --- Step 3: Create the transformed table if it doesn't exist ---
+        # The column definitions are created dynamically from the CSV
+        print(f"\n--- Creating table '{PG_TRANSFORMED_TABLE}' if it doesn't exist ---")
+        columns = ", ".join([f'"{tag}" DOUBLE PRECISION' for _, tag in tag_data])
+        create_table_query = f"""
+        CREATE TABLE IF NOT EXISTS "{PG_TRANSFORMED_TABLE}" (
+            "DateAndTime" TIMESTAMP,
+            {columns},
+            "Unmapped_TagIndex" INTEGER,
+            "Unmapped_Value" DOUBLE PRECISION
+        );
         """
-        pg_cursor.execute(drop_table_query)
+        pg_cursor.execute(create_table_query)
         pg_conn.commit()
-        print(f"✅ Table '{PG_TRANSFORMED_TABLE}' dropped if it existed.")
+        print(f"✅ Table '{PG_TRANSFORMED_TABLE}' verified or created with columns from '{TAGS_CSV_FILE}'.")
 
-        # --- Step 4: Dynamically generate and create the PIVOTED TABLE ---
-        print(f"\n--- Creating dynamic transformed TABLE '{PG_TRANSFORMED_TABLE}' ---")
+        # --- Step 4: Dynamically generate and insert the PIVOTED DATA ---
+        print(f"\n--- Inserting dynamic pivoted data into '{PG_TRANSFORMED_TABLE}' ---")
         
         # Build the dynamic CASE statements for the mapped tags
-        pivot_cases = [f"""MAX(CASE WHEN "TagName" = '{tag}' THEN "Val" END) AS "{tag}" """ for tag_index, tag in tag_data]
+        pivot_cases = [f"""MAX(CASE WHEN "TagName" = '{tag}' THEN "Val" END) AS "{tag}" """ for _, tag in tag_data]
         pivot_cases_str = ",\n             ".join(pivot_cases)
 
-        create_table_query = f"""
-        CREATE TABLE "{PG_TRANSFORMED_TABLE}" AS
+        insert_data_query = f"""
+        INSERT INTO "{PG_TRANSFORMED_TABLE}"
         WITH MappedData AS (
             SELECT
-                r."DateAndTime",
+                -- Truncate the timestamp to the minute for aggregation
+                date_trunc('minute', r."DateAndTime") AS "DateAndTime",
                 COALESCE(m."TagName", 'Unmapped') AS "TagName",
                 r."Val",
                 r."TagIndex"
@@ -100,14 +109,15 @@ def create_and_populate_physical_table():
         FROM
             MappedData
         GROUP BY
+            -- Group by the truncated minute timestamp
             "DateAndTime"
         ORDER BY
             "DateAndTime" DESC;
         """
         
-        pg_cursor.execute(create_table_query)
+        pg_cursor.execute(insert_data_query)
         pg_conn.commit()
-        print(f"✅ Physical table '{PG_TRANSFORMED_TABLE}' created successfully with {len(tag_data)} mapped columns.")
+        print(f"✅ Data successfully inserted into '{PG_TRANSFORMED_TABLE}'.")
 
     except psycopg2.Error as e:
         print(f"❌ PostgreSQL connection or query failed. Error: {e}", file=sys.stderr)
@@ -119,4 +129,4 @@ def create_and_populate_physical_table():
         print("\nScript finished.")
 
 if __name__ == "__main__":
-    create_and_populate_physical_table()
+    refresh_minute_data_table()
