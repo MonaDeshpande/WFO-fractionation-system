@@ -82,8 +82,8 @@ def refresh_minute_data_table():
         # --- Step 4: Dynamically generate and insert the PIVOTED DATA ---
         print(f"\n--- Inserting dynamic pivoted data into '{PG_TRANSFORMED_TABLE}' ---")
         
-        # Build the dynamic CASE statements for the mapped tags
-        pivot_cases = [f"""MAX(CASE WHEN "TagName" = '{tag}' THEN "Val" END) AS "{tag}" """ for _, tag in tag_data]
+        # Build the dynamic CASE statements for the mapped tags with a type cast
+        pivot_cases = [f"""MAX(CASE WHEN "TagName" = '{tag}' THEN "Val"::DOUBLE PRECISION END) AS "{tag}" """ for _, tag in tag_data]
         pivot_cases_str = ",\n             ".join(pivot_cases)
 
         insert_data_query = f"""
@@ -105,7 +105,7 @@ def refresh_minute_data_table():
             {pivot_cases_str},
             -- This part handles the unmapped tags
             MAX(CASE WHEN "TagName" = 'Unmapped' THEN "TagIndex" END) AS "Unmapped_TagIndex",
-            MAX(CASE WHEN "TagName" = 'Unmapped' THEN "Val" END) AS "Unmapped_Value"
+            MAX(CASE WHEN "TagName" = 'Unmapped' THEN "Val"::DOUBLE PRECISION END) AS "Unmapped_Value"
         FROM
             MappedData
         GROUP BY
