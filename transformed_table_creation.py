@@ -2,6 +2,7 @@ import psycopg2
 import sys
 import csv
 import time
+import re
 
 # ==============================================================================
 # CONFIGURATION
@@ -22,10 +23,86 @@ TAGS_CSV_FILE = "TAG_INDEX_FINAL.csv"
 # the script will automatically continue from the last processed time.
 START_DATE = "2024-01-01 00:00:00"
 
+def get_tag_data(pg_cursor):
+    """Reads tag data from the CSV and handles database mapping."""
+    tag_data = []
+    try:
+        with open(TAGS_CSV_FILE, 'r') as f:
+            reader = csv.reader(f)
+            next(reader)  # Skip the header row
+            for row in reader:
+                tag_data.append((int(row[0]), row[1]))
+        print(f"📁 Found {len(tag_data)} tags in {TAGS_CSV_FILE}.")
+    except FileNotFoundError:
+        print(f"❌ Error: {TAGS_CSV_FILE} not found. Please ensure the file exists.")
+        return None
+        
+    return tag_data
+
+def create_mapping_table(pg_cursor, pg_conn, tag_data):
+    """Creates the tag mapping table and populates it."""
+    print(f"\n--- Creating mapping table '{PG_MAPPING_TABLE}' if it doesn't exist ---")
+    create_mapping_table_query = f"""
+    CREATE TABLE IF NOT EXISTS "{PG_MAPPING_TABLE}" (
+        "TagIndex" INTEGER PRIMARY KEY,
+        "TagName" VARCHAR(255) UNIQUE
+    );
+    """
+    pg_cursor.execute(create_mapping_table_query)
+
+    insert_mapping_query = f"""
+    INSERT INTO "{PG_MAPPING_TABLE}" ("TagIndex", "TagName")
+    VALUES (%s, %s)
+    ON CONFLICT ("TagIndex") DO UPDATE SET "TagName" = EXCLUDED."TagName";
+    """
+    pg_cursor.executemany(insert_mapping_query, tag_data)
+    pg_conn.commit()
+    print(f"✅ Successfully inserted/updated {pg_cursor.rowcount} tags.")
+
+def create_transformed_table(pg_cursor, pg_conn, tag_data):
+    """
+    Creates the transformed table, dropping it first if it exists to ensure
+    the schema is always up-to-date with the tag list.
+    """
+    print(f"\n--- Creating table '{PG_TRANSFORMED_TABLE}' if it doesn't exist ---")
+    
+    # We will get the current schema and check for the unmapped columns
+    # This is safer than just dropping the table
+    pg_cursor.execute(f"SELECT column_name FROM information_schema.columns WHERE table_name = '{PG_TRANSFORMED_TABLE}' AND table_schema = 'public';")
+    existing_columns = [row[0] for row in pg_cursor.fetchall()]
+    
+    expected_columns = ["DateAndTime"] + [tag for _, tag in tag_data] + ["Unmapped_TagIndex", "Unmapped_Value"]
+    
+    # Check if the schema is up-to-date
+    if sorted(existing_columns) == sorted(expected_columns):
+        print(f"ℹ️ Table '{PG_TRANSFORMED_TABLE}' already exists with the correct schema.")
+        return
+
+    # If the schema is incorrect, drop and recreate the table
+    print(f"⚠️ Table '{PG_TRANSFORMED_TABLE}' schema is outdated. Dropping and recreating...")
+    pg_cursor.execute(f"""DROP TABLE IF EXISTS "{PG_TRANSFORMED_TABLE}" CASCADE;""")
+    pg_conn.commit()
+
+    columns_definitions = [f'"{tag}" DOUBLE PRECISION' for _, tag in tag_data]
+    columns_definitions.append('"Unmapped_TagIndex" INTEGER')
+    columns_definitions.append('"Unmapped_Value" DOUBLE PRECISION')
+    
+    columns_str = ",\n".join(columns_definitions)
+    
+    create_table_query = f"""
+    CREATE TABLE "{PG_TRANSFORMED_TABLE}" (
+        "DateAndTime" TIMESTAMP PRIMARY KEY,
+        {columns_str}
+    );
+    """
+    pg_cursor.execute(create_table_query)
+    pg_conn.commit()
+    print(f"✅ Table '{PG_TRANSFORMED_TABLE}' successfully recreated with the correct schema.")
+
+
 def process_scada_data():
     """
-    Connects to PostgreSQL and processes raw SCADA data into a wide-format
-    table, running in a continuous loop.
+    Main function to connect to PostgreSQL and process data.
     """
     pg_conn = None
     try:
@@ -34,81 +111,33 @@ def process_scada_data():
         pg_cursor = pg_conn.cursor()
         print("✅ Successfully connected to PostgreSQL.")
 
-        # --- Step 1: Create the Tag Mapping Table if it doesn't exist ---
-        print(f"\n--- Creating mapping table '{PG_MAPPING_TABLE}' if it doesn't exist ---")
-        create_mapping_table_query = f"""
-        CREATE TABLE IF NOT EXISTS "{PG_MAPPING_TABLE}" (
-            "TagIndex" INTEGER PRIMARY KEY,
-            "TagName" VARCHAR(255) UNIQUE
-        );
-        """
-        pg_cursor.execute(create_mapping_table_query)
-        pg_conn.commit()
-        print(f"✅ Mapping table '{PG_MAPPING_TABLE}' created or verified.")
-
-        # --- Step 2: Read tags from CSV and insert/update into the mapping table ---
-        print(f"\n--- Reading tags from '{TAGS_CSV_FILE}' and inserting into mapping table ---")
-        tag_data = []
-        try:
-            with open(TAGS_CSV_FILE, 'r') as f:
-                reader = csv.reader(f)
-                next(reader)  # Skip the header row
-                for row in reader:
-                    tag_data.append((int(row[0]), row[1]))
-            print(f"📁 Found {len(tag_data)} tags in {TAGS_CSV_FILE}.")
-        except FileNotFoundError:
-            print(f"❌ Error: {TAGS_CSV_FILE} not found. Please ensure the file exists.")
+        # Read tags from CSV and create/update the mapping table
+        tag_data = get_tag_data(pg_cursor)
+        if tag_data is None:
             return
+            
+        create_mapping_table(pg_cursor, pg_conn, tag_data)
+        create_transformed_table(pg_cursor, pg_conn, tag_data)
 
-        insert_mapping_query = f"""
-        INSERT INTO "{PG_MAPPING_TABLE}" ("TagIndex", "TagName")
-        VALUES (%s, %s)
-        ON CONFLICT ("TagIndex") DO UPDATE SET "TagName" = EXCLUDED."TagName";
-        """
-        pg_cursor.executemany(insert_mapping_query, tag_data)
-        pg_conn.commit()
-        print(f"✅ Successfully inserted/updated {pg_cursor.rowcount} tags.")
-        
-        # --- Step 3: Create the transformed table if it doesn't exist ---
-        print(f"\n--- Creating table '{PG_TRANSFORMED_TABLE}' if it doesn't exist ---")
-        columns = ", ".join([f'"{tag}" DOUBLE PRECISION' for _, tag in tag_data])
-        create_table_query = f"""
-        CREATE TABLE IF NOT EXISTS "{PG_TRANSFORMED_TABLE}" (
-            "DateAndTime" TIMESTAMP PRIMARY KEY,
-            {columns},
-            "Unmapped_TagIndex" INTEGER,
-            "Unmapped_Value" DOUBLE PRECISION
-        );
-        """
-        pg_cursor.execute(create_table_query)
-        pg_conn.commit()
-        print(f"✅ Table '{PG_TRANSFORMED_TABLE}' verified or created.")
-
-        # --- Step 4: Find the last processed timestamp to resume processing ---
-        # This query gets the most recent timestamp from the destination table.
-        # This is how the script "remembers" where it left off.
+        # Find the last processed timestamp
         get_last_timestamp_query = f"""
         SELECT MAX("DateAndTime") FROM "{PG_TRANSFORMED_TABLE}";
         """
         pg_cursor.execute(get_last_timestamp_query)
         last_processed_timestamp = pg_cursor.fetchone()[0]
-        
-        # Use the provided START_DATE if no data exists in the destination table yet.
         start_timestamp_for_this_run = last_processed_timestamp or START_DATE
         print(f"➡️ Starting data processing from: {start_timestamp_for_this_run}")
 
-        # --- Step 5: Dynamically generate and insert the PIVOTED DATA ---
+        # Dynamically generate and execute the pivot query
         print(f"\n--- Inserting dynamic pivoted data into '{PG_TRANSFORMED_TABLE}' ---")
         
-        # Build the dynamic CASE statements for the mapped tags with a type cast
         pivot_cases = [f"""MAX(CASE WHEN "TagName" = '{tag}' THEN "Val"::DOUBLE PRECISION END) AS "{tag}" """ for _, tag in tag_data]
-        pivot_cases_str = ",\n             ".join(pivot_cases)
+        pivot_cases_str = ",\n".join(pivot_cases)
 
         insert_data_query = f"""
         INSERT INTO "{PG_TRANSFORMED_TABLE}"
         WITH MappedData AS (
             SELECT
-                -- Truncate the timestamp to the minute for aggregation
                 date_trunc('minute', r."DateAndTime") AS "DateAndTime",
                 COALESCE(m."TagName", 'Unmapped') AS "TagName",
                 r."Val",
@@ -118,19 +147,16 @@ def process_scada_data():
             LEFT JOIN
                 "{PG_MAPPING_TABLE}" AS m ON r."TagIndex" = m."TagIndex"
             WHERE
-                -- This is the key line for resuming operation: it filters for new data
                 r."DateAndTime" > %s
         )
         SELECT
             "DateAndTime",
             {pivot_cases_str},
-            -- This part handles the unmapped tags
             MAX(CASE WHEN "TagName" = 'Unmapped' THEN "TagIndex" END) AS "Unmapped_TagIndex",
             MAX(CASE WHEN "TagName" = 'Unmapped' THEN "Val"::DOUBLE PRECISION END) AS "Unmapped_Value"
         FROM
             MappedData
         GROUP BY
-            -- Group by the truncated minute timestamp
             "DateAndTime"
         ORDER BY
             "DateAndTime" ASC
