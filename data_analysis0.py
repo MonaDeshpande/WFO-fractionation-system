@@ -1,175 +1,175 @@
 import pandas as pd
-import numpy as np
-import seaborn as sns
-import matplotlib.pyplot as plt
-from sklearn.model_selection import train_test_split
-from sklearn.linear_model import LinearRegression
-from sklearn.metrics import mean_squared_error, r2_score
-import psycopg2
+import io
 import sys
-import datetime
 
 # ==============================================================================
 # CONFIGURATION
 # ==============================================================================
-# --- Database Connection (uncomment if you want to use the database directly) ---
-PG_HOST = "localhost"
-PG_PORT = "5432"
-PG_USER = "postgres"
-PG_PASSWORD = "ADMIN"  # <-- IMPORTANT: Add your PostgreSQL password here
-PG_DB_NAME = "scada_data_analysis"
-PG_TRANSFORMED_TABLE = "wide_scada_data" # Using the transformed table from your previous script
+# A string containing the data from your lab report image.
+LAB_DATA_STRING = """
+date,time,column,component,naphthalene_oil_percent
+08.08.25,06.00AM,C-03-T,phthaleine,87.71
+08.08.25,06.00AM,C-02-T,"Light Oil",53.42
+08.08.25,06.00AM,C-03-B,"Wash Oil",1.25
+08.08.25,06.00AM,C-01-B,"Anthracene Oil",0.03
+08.08.25,09.30AM,P-01,"WFO",56.38
+08.08.25,11.30AM,C-02-T,"Light Oil",8.02
+08.08.25,03.15PM,C-03-T,phthaleine,87.05
+08.08.25,03.15PM,C-02-T,"Light Oil",8.24
+08.08.25,06.30AM,P-01,"WFO",57.03
+08.08.25,07.30PM,C-03-B,"Wash Oil",0.01
+08.08.25,07.30PM,C-01-B,"Anthracene Oil",0.02
+"""
 
-# --- User Input ---
-# This is the file containing the final lab results for purity.
-LAB_DATA_FILE = "purity_lab_results.csv" 
-# This is the name of the column in the lab results file that holds the purity values.
-PURITY_COLUMN = 'Purity'
-
-def get_user_date_range():
+# ==============================================================================
+# FUNCTIONS
+# ==============================================================================
+def create_report(df):
     """
-    Prompts the user to enter a start and end date for analysis.
+    Analyzes the lab data and generates a human-readable report based on purity rules.
     """
-    while True:
-        try:
-            start_date_str = input("Enter start date (YYYY-MM-DD HH:MM:SS): ")
-            end_date_str = input("Enter end date (YYYY-MM-DD HH:MM:SS): ")
-            
-            start_date = datetime.datetime.strptime(start_date_str, '%Y-%m-%d %H:%M:%S')
-            end_date = datetime.datetime.strptime(end_date_str, '%Y-%m-%d %H:%M:%S')
+    print("------------------------------------------------------------------")
+    print("                Naphthalene Oil Purity Report                     ")
+    print("------------------------------------------------------------------\n")
 
-            if start_date >= end_date:
-                print("❌ Start date must be before end date. Please try again.")
-                continue
+    # Define desired purity levels for different components
+    purity_limits_low = {
+        "Light Oil": 15.0,
+        "Wash Oil": 2.0,
+        "Anthracene Oil": 2.0,
+    }
+    
+    # Naphthalene Oil product should have high purity.
+    # We'll set a high target to flag anything below it.
+    purity_target_high = {
+        "phthaleine": 90.0,
+    }
+    
+    out_of_spec_low = []
+    out_of_spec_high = []
 
-            return start_date, end_date
-        except ValueError:
-            print("❌ Invalid date format. Please use 'YYYY-MM-DD HH:MM:SS'.")
+    for index, row in df.iterrows():
+        component = row['component']
+        purity_percentage = row['naphthalene_oil_percent']
+        date = row['date']
+        time = row['time']
 
-def load_data(start_date, end_date):
+        # Check for products where naphthalene % should be low
+        if component in purity_limits_low:
+            limit = purity_limits_low[component]
+            if purity_percentage > limit:
+                out_of_spec_low.append({
+                    'date': date,
+                    'time': time,
+                    'component': component,
+                    'actual_purity': purity_percentage,
+                    'purity_limit': limit
+                })
+        
+        # Check for products where naphthalene % should be high
+        if component in purity_target_high:
+            target = purity_target_high[component]
+            if purity_percentage < target:
+                out_of_spec_high.append({
+                    'date': date,
+                    'time': time,
+                    'component': component,
+                    'actual_purity': purity_percentage,
+                    'purity_target': target
+                })
+
+    # Print the report for low-purity products
+    if out_of_spec_low:
+        print("❌ WARNING: The following samples are out of specification for Naphthalene Oil purity:")
+        print("------------------------------------------------------------------")
+        for item in out_of_spec_low:
+            print(f"Date: {item['date']} at {item['time']}")
+            print(f"  - Component: {item['component']}")
+            print(f"  - Purity: {item['actual_purity']:.2f}% (Limit: <{item['purity_limit']}%)")
+            print("  - Potential Issue: This indicates a problem with the separation process. Check the distillation column settings or upstream conditions.")
+            print("------------------------------------------------------------------")
+    
+    # Print the report for high-purity products
+    if out_of_spec_high:
+        print("\n⚠️ NOTE: The following samples are below the target purity for Naphthalene Oil:")
+        print("------------------------------------------------------------------")
+        for item in out_of_spec_high:
+            print(f"Date: {item['date']} at {item['time']}")
+            print(f"  - Component: {item['component']}")
+            print(f"  - Purity: {item['actual_purity']:.2f}% (Target: >{item['purity_target']}%)")
+            print("  - Suggestion: This may indicate an efficiency issue. Consider optimizing process parameters to increase yield.")
+            print("------------------------------------------------------------------")
+    
+    if not out_of_spec_low and not out_of_spec_high:
+        print("✅ All samples are within the specified purity limits. The plant is operating well.")
+        print("------------------------------------------------------------------")
+
+def analyze_wfo_impact(df_wfo, df_products):
     """
-    Loads SCADA data from the PostgreSQL database and lab results from a CSV.
+    Analyzes the correlation between WFO percentage and product purity.
     """
-    pg_conn = None
+    print("------------------------------------------------------------------")
+    print("        Analysis: Impact of Naphthalene in WFO on Products        ")
+    print("------------------------------------------------------------------")
+
+    if df_wfo.empty or df_products.empty:
+        print("❌ Not enough data to perform WFO impact analysis.")
+        return
+
+    correlations = {}
+
+    for product in df_products['component'].unique():
+        product_df = df_products[df_products['component'] == product].copy()
+        
+        product_df['temp_merge_key'] = product_df['DateAndTime']
+        df_wfo['temp_merge_key'] = df_wfo['DateAndTime']
+        
+        # We use merge_asof to find the most recent WFO data for each product sample.
+        merged_df = pd.merge_asof(
+            product_df, 
+            df_wfo, 
+            on='temp_merge_key', 
+            direction='backward'
+        )
+        
+        if len(merged_df) > 1:
+            correlation = merged_df['naphthalene_oil_percent_x'].corr(merged_df['naphthalene_oil_percent_y'])
+            correlations[product] = correlation
+    
+    if correlations:
+        print("✅ Correlation coefficients between WFO Naphthalene % and product purity:")
+        for product, corr in correlations.items():
+            if not pd.isna(corr):
+                print(f"  - {product}: {corr:.2f}")
+    else:
+        print("❌ Could not calculate correlations. Not enough data points to analyze.")
+
+def process_lab_data():
+    """
+    Main function to process the lab data and generate the report.
+    """
     try:
-        # --- Step 1: Load SCADA data from PostgreSQL ---
-        print("Connecting to PostgreSQL...")
-        pg_conn = psycopg2.connect(host=PG_HOST, port=PG_PORT, user=PG_USER, password=PG_PASSWORD, dbname=PG_DB_NAME)
-        pg_cursor = pg_conn.cursor()
-        print("✅ Successfully connected to PostgreSQL.")
-
-        print(f"\nFetching data from '{PG_TRANSFORMED_TABLE}' between {start_date} and {end_date}...")
-        fetch_query = f"""
-        SELECT * FROM "{PG_TRANSFORMED_TABLE}"
-        WHERE "DateAndTime" BETWEEN %s AND %s
-        ORDER BY "DateAndTime" ASC;
-        """
-        # The pd.read_sql function handles the query execution and DataFrame creation.
-        df_scada = pd.read_sql(fetch_query, pg_conn, params=(start_date, end_date))
-        print(f"✅ SCADA data fetched successfully. Shape: {df_scada.shape}")
+        # Use io.StringIO to treat the string as a file
+        df = pd.read_csv(io.StringIO(LAB_DATA_STRING))
         
-        # --- Step 2: Load lab results from CSV ---
-        print(f"\nLoading lab results from {LAB_DATA_FILE}...")
-        lab_df = pd.read_csv(LAB_DATA_FILE)
-        print(f"✅ Lab results loaded. Shape: {lab_df.shape}")
-
-        # --- Step 3: Prepare and merge the dataframes ---
-        # Convert the timestamp columns to a proper datetime format.
-        df_scada['DateAndTime'] = pd.to_datetime(df_scada['DateAndTime'])
-        lab_df['DateAndTime'] = pd.to_datetime(lab_df['DateAndTime'])
-
-        # Now, we merge the two dataframes.
-        df = pd.merge(df_scada, lab_df, on='DateAndTime', how='left')
+        # Strip any leading/trailing whitespace from column names
+        df.columns = df.columns.str.strip()
         
-        # We drop any rows where there is no purity data.
-        df.dropna(subset=[PURITY_COLUMN], inplace=True)
+        print("✅ Lab data loaded successfully.")
         
-        print("\n✅ Data successfully merged and cleaned.")
-        print(f"Final merged dataset shape: {df.shape}")
-        return df
+        # Convert date and time columns to a single datetime object
+        df['DateAndTime'] = pd.to_datetime(df['date'] + ' ' + df['time'], format='%d.%m.%y %I.%M%p')
+        
+        # Separate the WFO data from the final product data
+        df_wfo = df[df['component'] == 'WFO'].sort_values('DateAndTime')
+        df_products = df[df['component'].isin(["Light Oil", "Wash Oil", "Anthracene Oil", "phthaleine"])].sort_values('DateAndTime')
+        
+        # Run the analysis and generate the report
+        create_report(df_products)
+        analyze_wfo_impact(df_wfo, df_products)
 
-    except FileNotFoundError as e:
-        print(f"❌ Error: {e}")
-        print("Please make sure your lab results file is in the same directory.")
-        return None
-    except psycopg2.Error as e:
-        print(f"❌ PostgreSQL connection or query failed. Error: {e}", file=sys.stderr)
-        return None
     except Exception as e:
-        print(f"❌ An unexpected error occurred while loading data: {e}", file=sys.stderr)
-        return None
-    finally:
-        if pg_conn:
-            pg_conn.close()
-            print("Database connection closed.")
-
-
-def analyze_purity(df):
-    """
-    Performs a correlation analysis and a linear regression to identify
-    factors affecting purity.
-    """
-    if df is None or df.empty:
-        print("Cannot perform analysis. Dataframe is empty after merging.")
-        return
-
-    # --- Step 1: Data Preparation ---
-    features = df.select_dtypes(include=np.number).drop(columns=[PURITY_COLUMN], errors='ignore')
-    target = df[PURITY_COLUMN]
-    
-    if target.empty or features.empty:
-        print(f"❌ Error: Could not find '{PURITY_COLUMN}' or other numeric features.")
-        return
-
-    # --- Step 2: Correlation Analysis ---
-    print("\n--- Correlation Analysis ---")
-    correlations = df.corr(numeric_only=True)[PURITY_COLUMN].sort_values(ascending=False)
-    print("Top 10 features most correlated with purity:")
-    print(correlations.head(10))
-
-    # --- Step 3: Linear Regression Analysis ---
-    print("\n--- Linear Regression Analysis ---")
-    
-    X = features
-    y = target
-    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
-
-    model = LinearRegression()
-    model.fit(X_train, y_train)
-
-    y_pred = model.predict(X_test)
-    mse = mean_squared_error(y_test, y_pred)
-    r2 = r2_score(y_test, y_pred)
-
-    print(f"Mean Squared Error (MSE): {mse:.2f}")
-    print(f"R-squared (R²): {r2:.2f}")
-    
-    feature_importance = pd.DataFrame({
-        'Feature': X.columns,
-        'Coefficient': model.coef_
-    }).sort_values(by='Coefficient', ascending=False)
-    
-    print("\nTop 10 factors affecting purity (based on regression coefficients):")
-    print(feature_importance.head(10))
-
-    # --- Step 4: Visualization (for better understanding) ---
-    plt.style.use('seaborn-v0_8-whitegrid')
-    
-    fig, axes = plt.subplots(5, 1, figsize=(10, 25))
-    top_5_corr_features = correlations.index[1:6]
-    
-    for i, feature in enumerate(top_5_corr_features):
-        sns.scatterplot(data=df, x=feature, y=PURITY_COLUMN, ax=axes[i], alpha=0.6)
-        axes[i].set_title(f'Purity vs. {feature}')
-        axes[i].set_xlabel(feature)
-        axes[i].set_ylabel(PURITY_COLUMN)
-        axes[i].grid(True)
-    
-    plt.tight_layout()
-    plt.show()
+        print(f"❌ An error occurred while processing data: {e}", file=sys.stderr)
 
 if __name__ == "__main__":
-    start_date, end_date = get_user_date_range()
-    data = load_data(start_date, end_date)
-    if data is not None:
-        analyze_purity(data)
+    process_lab_data()
