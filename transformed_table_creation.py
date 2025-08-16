@@ -1,6 +1,7 @@
 import psycopg2
 import sys
 import csv
+import time
 
 # ==============================================================================
 # CONFIGURATION
@@ -13,17 +14,22 @@ PG_DB_NAME = "scada_data_analysis"
 PG_RAW_TABLE = "raw_data"
 PG_MAPPING_TABLE = "tag_mapping"
 PG_TRANSFORMED_TABLE = "wide_scada_data"
-TAGS_CSV_FILE = "tags.csv"
+TAGS_CSV_FILE = "TAG_INDEX_FINAL.csv"
 
-def refresh_minute_data_table():
+# --- USER INPUT ---
+# Placeholder: Change this to your desired start date for the initial run.
+# The format must be 'YYYY-MM-DD HH:MM:SS'. After the first run,
+# the script will automatically continue from the last processed time.
+START_DATE = "2024-01-01 00:00:00"
+
+def process_scada_data():
     """
-    Connects to PostgreSQL, ensures tables exist, and populates it with
-    minute-aggregated data. It assumes the table is either new or has been
-    cleared by a separate process.
+    Connects to PostgreSQL and processes raw SCADA data into a wide-format
+    table, running in a continuous loop.
     """
     pg_conn = None
     try:
-        print("Connecting to PostgreSQL to refresh database objects...")
+        print("Connecting to PostgreSQL...")
         pg_conn = psycopg2.connect(host=PG_HOST, port=PG_PORT, user=PG_USER, password=PG_PASSWORD, dbname=PG_DB_NAME)
         pg_cursor = pg_conn.cursor()
         print("✅ Successfully connected to PostgreSQL.")
@@ -51,7 +57,7 @@ def refresh_minute_data_table():
                     tag_data.append((int(row[0]), row[1]))
             print(f"📁 Found {len(tag_data)} tags in {TAGS_CSV_FILE}.")
         except FileNotFoundError:
-            print(f"❌ Error: {TAGS_CSV_FILE} not found. Please create the file with 'TagIndex' and 'TagName' columns.")
+            print(f"❌ Error: {TAGS_CSV_FILE} not found. Please ensure the file exists.")
             return
 
         insert_mapping_query = f"""
@@ -64,12 +70,11 @@ def refresh_minute_data_table():
         print(f"✅ Successfully inserted/updated {pg_cursor.rowcount} tags.")
         
         # --- Step 3: Create the transformed table if it doesn't exist ---
-        # The column definitions are created dynamically from the CSV
         print(f"\n--- Creating table '{PG_TRANSFORMED_TABLE}' if it doesn't exist ---")
         columns = ", ".join([f'"{tag}" DOUBLE PRECISION' for _, tag in tag_data])
         create_table_query = f"""
         CREATE TABLE IF NOT EXISTS "{PG_TRANSFORMED_TABLE}" (
-            "DateAndTime" TIMESTAMP,
+            "DateAndTime" TIMESTAMP PRIMARY KEY,
             {columns},
             "Unmapped_TagIndex" INTEGER,
             "Unmapped_Value" DOUBLE PRECISION
@@ -77,9 +82,22 @@ def refresh_minute_data_table():
         """
         pg_cursor.execute(create_table_query)
         pg_conn.commit()
-        print(f"✅ Table '{PG_TRANSFORMED_TABLE}' verified or created with columns from '{TAGS_CSV_FILE}'.")
+        print(f"✅ Table '{PG_TRANSFORMED_TABLE}' verified or created.")
 
-        # --- Step 4: Dynamically generate and insert the PIVOTED DATA ---
+        # --- Step 4: Find the last processed timestamp to resume processing ---
+        # This query gets the most recent timestamp from the destination table.
+        # This is how the script "remembers" where it left off.
+        get_last_timestamp_query = f"""
+        SELECT MAX("DateAndTime") FROM "{PG_TRANSFORMED_TABLE}";
+        """
+        pg_cursor.execute(get_last_timestamp_query)
+        last_processed_timestamp = pg_cursor.fetchone()[0]
+        
+        # Use the provided START_DATE if no data exists in the destination table yet.
+        start_timestamp_for_this_run = last_processed_timestamp or START_DATE
+        print(f"➡️ Starting data processing from: {start_timestamp_for_this_run}")
+
+        # --- Step 5: Dynamically generate and insert the PIVOTED DATA ---
         print(f"\n--- Inserting dynamic pivoted data into '{PG_TRANSFORMED_TABLE}' ---")
         
         # Build the dynamic CASE statements for the mapped tags with a type cast
@@ -99,6 +117,9 @@ def refresh_minute_data_table():
                 "{PG_RAW_TABLE}" AS r
             LEFT JOIN
                 "{PG_MAPPING_TABLE}" AS m ON r."TagIndex" = m."TagIndex"
+            WHERE
+                -- This is the key line for resuming operation: it filters for new data
+                r."DateAndTime" > %s
         )
         SELECT
             "DateAndTime",
@@ -112,12 +133,14 @@ def refresh_minute_data_table():
             -- Group by the truncated minute timestamp
             "DateAndTime"
         ORDER BY
-            "DateAndTime" DESC;
+            "DateAndTime" ASC
+        ON CONFLICT ("DateAndTime") DO NOTHING;
         """
         
-        pg_cursor.execute(insert_data_query)
+        pg_cursor.execute(insert_data_query, (start_timestamp_for_this_run,))
+        rows_inserted = pg_cursor.rowcount
         pg_conn.commit()
-        print(f"✅ Data successfully inserted into '{PG_TRANSFORMED_TABLE}'.")
+        print(f"✅ Successfully inserted {rows_inserted} new rows into '{PG_TRANSFORMED_TABLE}'.")
 
     except psycopg2.Error as e:
         print(f"❌ PostgreSQL connection or query failed. Error: {e}", file=sys.stderr)
@@ -126,7 +149,10 @@ def refresh_minute_data_table():
     finally:
         if pg_conn:
             pg_conn.close()
-        print("\nScript finished.")
+            print("\nDatabase connection closed.")
 
 if __name__ == "__main__":
-    refresh_minute_data_table()
+    while True:
+        process_scada_data()
+        print("Waiting for 60 seconds before the next run...")
+        time.sleep(60)
