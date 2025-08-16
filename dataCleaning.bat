@@ -1,5 +1,5 @@
 @echo off
-set SCRIPT_NAME=scada_processor.py
+set SCRIPT_NAME=data_cleaning_logic.py
 
 REM --- 1. Check if a virtual environment exists. If not, create one. ---
 if not exist "venv\Scripts\activate.bat" (
