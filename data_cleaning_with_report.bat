@@ -1,5 +1,5 @@
 @echo off
-:: data_cleaning_report.bat
+:: data_cleaning_batch_run.bat
 :: This batch file sets up and runs the SCADA data cleaning and reporting script for a specific date range.
 
 :: --- CONFIGURATION (UPDATE THESE PATHS) ---
@@ -11,15 +11,15 @@ SET "VENV_NAME=scada_venv"
 SET "SCRIPT_DIR=C:\Path\To\Your\Script"
 
 :: The name of your Python script file.
-SET "SCRIPT_NAME=data_cleaning_report.py"
+SET "SCRIPT_NAME=scada_data_cleaning_report.py"
 
-:: The directory where you want to save the log and Excel report files.
-SET "REPORT_DIR=%SCRIPT_DIR%\reports"
+:: The directory where you want to save the log files.
+SET "LOG_DIR=%SCRIPT_DIR%\logs"
 
 :: --- EXECUTION ---
 echo.
 echo =========================================================
-echo === Preparing and Starting SCADA Data Reporting Process ===
+echo === Preparing and Starting SCADA Data Batch Process ===
 echo =========================================================
 echo Start Time: %date% %time%
 echo.
@@ -59,11 +59,9 @@ echo ✅ Required libraries installed.
 :: 4. Prepare for script execution.
 echo.
 echo Running Python script: "%SCRIPT_NAME%"...
-if not exist "%REPORT_DIR%" mkdir "%REPORT_DIR%"
-
-:: Log file name with a unique timestamp.
-SET "LOG_FILE_NAME=scada_report_log_%date:~10,4%-%date:~4,2%-%date:~7,2%_%time:~0,2%-%time:~3,2%-%time:~6,2%.log"
-SET "LOG_FILE=%REPORT_DIR%\%LOG_FILE_NAME%"
+if not exist "%LOG_DIR%" mkdir "%LOG_DIR%"
+SET "LOG_FILE_NAME=scada_batch_log_%date:~10,4%-%date:~4,2%-%date:~7,2%_%time:~0,2%-%time:~3,2%-%time:~6,2%.log"
+SET "LOG_FILE=%LOG_DIR%\%LOG_FILE_NAME%"
 
 :: 5. Execute the Python script.
 python "%SCRIPT_NAME%" > "%LOG_FILE%" 2>&1
@@ -82,7 +80,7 @@ IF %ERRORLEVEL% NEQ 0 (
 :: --- REPORTING ---
 echo.
 echo =========================================================
-echo === SCADA Data Reporting Process Complete ===
+echo === SCADA Data Batch Process Complete ===
 echo =========================================================
 echo End Time: %date% %time%
 echo Log file created at: "%LOG_FILE%"

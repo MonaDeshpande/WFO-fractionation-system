@@ -13,26 +13,29 @@ PG_PORT = "5432"
 PG_USER = "postgres"
 PG_PASSWORD = "ADMIN"  # <-- IMPORTANT: Add your PostgreSQL password here
 PG_DB_NAME = "scada_data_analysis"
-PG_RAW_TABLE = "wide_scada_data"  # Updated raw data table name
-PG_CLEANED_TABLE = "scada_data_cleaned_report"  # Updated cleaned data table name
+PG_RAW_TABLE = "raw_data"
+PG_MAPPING_TABLE = "tag_mapping"
+PG_CLEANED_TABLE = "cleaned_scada_data_report"
 TAGS_CSV_FILE = "TAG_INDEX_FINAL.csv"
 
 # --- USER INPUT ---
 # Placeholder: Change this to your desired start and end date for a single run.
+# The format must be 'YYYY-MM-DD HH:MM:SS'.
 START_DATE = "2025-08-08 00:00:00"
-END_DATE = "2025-08-15 00:00:00"
+END_DATE = "2024-08-15 00:00:00" # Set an end date for a batch run
 
 # Faulty value constant
 FAULTY_VALUE = 32767
 # Thresholds for anomaly detection
 SPIKE_THRESHOLD_C = 20
-FLOW_ANOMALY_THRESHOLD = 0.5
+FLOW_ANOMALY_THRESHOLD = 0.5  # Assumes values are non-negative
 
 # Distillation column tag sequences for temperature and pressure profiles
+# These lists are derived directly from your provided logic.
 DISTILLATION_COLUMNS = {
     "Column_1": {
         "temperature": ["TI61", "TI62", "TI63", "TI64", "TI65"],
-        "pressure": ["PI61", "PI62"]
+        "pressure": ["PI61", "PI62"] # Example PIs, adjust as needed
     },
     "Column_2": {
         "temperature": ["TI03", "TI04", "TI05", "TI06"],
@@ -52,18 +55,36 @@ DISTILLATION_COLUMNS = {
 TAG_TYPES = {
     "TI": ["TI61", "TI62", "TI63", "TI64", "TI65", "TI03", "TI04", "TI05", "TI06", "TI13", "TI14", "TI15", "TI16", "TI17", "TI18", "TI19", "TI20", "TI21", "TI22", "TI23", "TI24", "TI31", "TI32", "TI33", "TI34", "TI35", "TI36", "TI37", "TI38", "TI39", "TI215"],
     "PI": ["PI61", "PI62", "PI03", "PI04", "PI13", "PI24", "PI31", "PI39"],
-    "LI": ["LI61", "LI62", "LI03", "LI04"],
+    "LI": ["LI61", "LI62", "LI03", "LI04"], # Example LIs, adjust as needed
     "FI": ["FI08", "FI09", "FI10"]
 }
 
 
-def create_cleaned_table(pg_cursor, columns_from_raw_data):
-    """Creates the cleaned data table dynamically based on raw table columns."""
-    print("--- Verifying database table for cleaned data ---")
+def create_db_tables(pg_cursor, tag_data):
+    """Creates the necessary tables if they don't exist."""
+    print("--- Verifying database tables ---")
     
-    # Exclude DateAndTime from the dynamic columns as it's the primary key
-    data_columns = [f'"{col}" DOUBLE PRECISION' for col in columns_from_raw_data if col != "DateAndTime"]
+    # Create the mapping table
+    create_mapping_table_query = f"""
+    CREATE TABLE IF NOT EXISTS "{PG_MAPPING_TABLE}" (
+        "TagIndex" INTEGER PRIMARY KEY,
+        "TagName" VARCHAR(255) UNIQUE
+    );
+    """
+    pg_cursor.execute(create_mapping_table_query)
+
+    # Insert tags from CSV into the mapping table
+    insert_mapping_query = f"""
+    INSERT INTO "{PG_MAPPING_TABLE}" ("TagIndex", "TagName")
+    VALUES (%s, %s)
+    ON CONFLICT ("TagIndex") DO UPDATE SET "TagName" = EXCLUDED."TagName";
+    """
+    pg_cursor.executemany(insert_mapping_query, tag_data)
+
+    # Dynamically create the cleaned data table with anomaly flag columns
+    columns = [f'"{tag}" DOUBLE PRECISION' for _, tag in tag_data]
     
+    # Add columns for anomaly flags and imputed values
     flag_columns = [
         '"is_faulty_sensor" BOOLEAN DEFAULT FALSE',
         '"is_temp_anomaly" BOOLEAN DEFAULT FALSE',
@@ -73,54 +94,24 @@ def create_cleaned_table(pg_cursor, columns_from_raw_data):
         '"is_stuck_sensor" BOOLEAN DEFAULT FALSE',
         '"is_plant_shutdown" BOOLEAN DEFAULT FALSE',
         '"is_boiler_anomaly" BOOLEAN DEFAULT FALSE',
-        '"imputed_with" VARCHAR(50) DEFAULT NULL'
+        '"imputed_with" VARCHAR(50) DEFAULT NULL' # 'LKG' or 'Interpolation'
     ]
     
     create_cleaned_table_query = f"""
     CREATE TABLE IF NOT EXISTS "{PG_CLEANED_TABLE}" (
         "DateAndTime" TIMESTAMP PRIMARY KEY,
-        {", ".join(data_columns)},
+        {", ".join(columns)},
         {", ".join(flag_columns)}
     );
     """
     pg_cursor.execute(create_cleaned_table_query)
     pg_cursor.connection.commit()
-    print(f"✅ Table verified/created: {PG_CLEANED_TABLE}")
+    print(f"✅ Tables verified/created: {PG_MAPPING_TABLE}, {PG_CLEANED_TABLE}")
 
-def generate_excel_report(start_timestamp, end_timestamp):
-    """
-    Connects to the database, fetches cleaned data for a specific range, and generates an Excel report.
-    """
-    print("\n--- Generating Excel Report ---")
-    pg_conn = None
-    try:
-        pg_conn = psycopg2.connect(host=PG_HOST, port=PG_PORT, user=PG_USER, password=PG_PASSWORD, dbname=PG_DB_NAME)
-        
-        query = f"""
-        SELECT * FROM "{PG_CLEANED_TABLE}"
-        WHERE "DateAndTime" BETWEEN %s AND %s
-        ORDER BY "DateAndTime";
-        """
-        
-        df = pd.read_sql_query(query, pg_conn, params=(start_timestamp, end_timestamp))
-        
-        timestamp_str = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-        report_filename = f"SCADA_Cleaned_Data_Report_{timestamp_str}.xlsx"
-        
-        df.to_excel(report_filename, index=False)
-        
-        print(f"📊 Report successfully generated at: {report_filename}")
-        print(f"   Rows exported: {len(df)}")
-
-    except Exception as e:
-        print(f"❌ An error occurred during Excel report generation: {e}", file=sys.stderr)
-    finally:
-        if pg_conn:
-            pg_conn.close()
 
 def process_scada_data_in_range(start_timestamp, end_timestamp):
     """
-    Processes raw SCADA data from a wide table, applies cleaning logic, and inserts into a new table.
+    Connects to PostgreSQL and processes raw SCADA data for a specific time range.
     """
     pg_conn = None
     try:
@@ -129,28 +120,62 @@ def process_scada_data_in_range(start_timestamp, end_timestamp):
         pg_cursor = pg_conn.cursor()
         print("✅ Successfully connected to PostgreSQL.")
 
-        # Fetch all data within the range from the wide table
+        # Read tags from CSV for table creation and processing
+        tag_data = []
+        try:
+            with open(TAGS_CSV_FILE, 'r') as f:
+                reader = csv.reader(f)
+                next(reader)
+                for row in reader:
+                    tag_data.append((int(row[0]), row[1]))
+            print(f"📁 Found {len(tag_data)} tags in {TAGS_CSV_FILE}.")
+        except FileNotFoundError:
+            print(f"❌ Error: {TAGS_CSV_FILE} not found. Please ensure the file exists.")
+            return
+
+        # Create or update database tables
+        create_db_tables(pg_cursor, tag_data)
+        
+        # Fetch new raw data since the last run
         fetch_raw_data_query = f"""
-        SELECT * FROM "{PG_RAW_TABLE}"
-        WHERE "DateAndTime" BETWEEN %s AND %s
-        ORDER BY "DateAndTime" ASC;
+        SELECT
+            date_trunc('minute', r."DateAndTime") as "DateAndTime",
+            m."TagName",
+            r."Val"
+        FROM
+            "{PG_RAW_TABLE}" AS r
+        LEFT JOIN
+            "{PG_MAPPING_TABLE}" AS m ON r."TagIndex" = m."TagIndex"
+        WHERE
+            r."DateAndTime" BETWEEN %s AND %s
+        ORDER BY
+            r."DateAndTime" ASC;
         """
         pg_cursor.execute(fetch_raw_data_query, (start_timestamp, end_timestamp))
-        
-        # Get column names from the cursor description
-        columns = [desc[0] for desc in pg_cursor.description]
         raw_data = pg_cursor.fetchall()
         
         if not raw_data:
-            print("No data found in the specified range. Exiting.")
+            print("No data found in the specified range.")
             return
 
-        create_cleaned_table(pg_cursor, columns)
-        
-        cleaned_data_to_insert = []
+        # Group data by timestamp for minute-by-minute processing
+        data_by_minute = {}
         for row in raw_data:
-            minute_data = dict(zip(columns, row))
+            ts, tag, val = row
+            minute_key = ts.strftime('%Y-%m-%d %H:%M:00')
+            if minute_key not in data_by_minute:
+                data_by_minute[minute_key] = {"DateAndTime": ts, "flags": {}}
+                for _, tname in tag_data:
+                    data_by_minute[minute_key][tname] = None
+            data_by_minute[minute_key][tag] = val
+
+        print(f"Processing {len(data_by_minute)} minutes of new data...")
+        
+        # Apply cleaning logic to each minute of data
+        cleaned_data_to_insert = []
+        for minute_key, minute_data in data_by_minute.items():
             
+            # Initialize flags for this row
             flags = {
                 "is_faulty_sensor": False,
                 "is_temp_anomaly": False,
@@ -163,17 +188,102 @@ def process_scada_data_in_range(start_timestamp, end_timestamp):
                 "imputed_with": None
             }
 
-            # Apply cleaning logic
+            # --- 1. Faulty Sensor Value Check ---
             for tag_name, value in minute_data.items():
                 if isinstance(value, (int, float)):
                     if value == FAULTY_VALUE:
                         flags["is_faulty_sensor"] = True
-                    
+                    # Check for sudden temperature spike (TI only)
                     if tag_name in TAG_TYPES.get("TI", []):
-                        if value > 500 and not flags["is_faulty_sensor"]:
+                        # For a basic implementation, we can check for a very large value.
+                        if value > 500 and not flags["is_faulty_sensor"]: # Example threshold
                             flags["is_process_excursion"] = True
 
+            # --- 2. Process-Based Logic ---
             for col_name, col_data in DISTILLATION_COLUMNS.items():
+                # Temperature Profile Check
                 temp_tags = col_data.get("temperature", [])
                 for i in range(len(temp_tags) - 1):
-                    current_temp = minute_data.get(temp_tags
+                    current_temp = minute_data.get(temp_tags[i])
+                    next_temp = minute_data.get(temp_tags[i+1])
+                    if current_temp is not None and next_temp is not None:
+                        if next_temp > current_temp:
+                            flags["is_temp_anomaly"] = True
+                            
+                # Pressure Profile Check (simplified)
+                pressure_tags = col_data.get("pressure", [])
+                if len(pressure_tags) >= 2:
+                    top_pressure = minute_data.get(pressure_tags[-1])
+                    bottom_pressure = minute_data.get(pressure_tags[0])
+                    if top_pressure is not None and bottom_pressure is not None:
+                        if top_pressure > bottom_pressure:
+                            flags["is_pressure_anomaly"] = True
+            
+            # Check for boiler anomaly
+            boiler_temp = minute_data.get("TI215")
+            if boiler_temp is not None and not (325 <= boiler_temp <= 340):
+                flags["is_boiler_anomaly"] = True
+
+            # --- 3. Multi-Sensor Correlation Logic ---
+            # Plant Shutdown Check
+            fi_vals = [minute_data.get(f) for f in TAG_TYPES["FI"]]
+            if all(v is not None and v < FLOW_ANOMALY_THRESHOLD for v in fi_vals):
+                flags["is_plant_shutdown"] = True
+            
+            # --- 5. Handling and Imputing Faulty Values (Simplified) ---
+            # Create the final row to insert
+            row_to_insert = [minute_data.get(tag[1]) for tag in tag_data]
+            
+            # Apply a simple imputation logic: replace FAULTY_VALUE with None
+            for i, val in enumerate(row_to_insert):
+                if val == FAULTY_VALUE:
+                    row_to_insert[i] = None # A more advanced script would use LKG or interpolation here
+                    flags["imputed_with"] = "None"
+
+            row_to_insert.append(flags["is_faulty_sensor"])
+            row_to_insert.append(flags["is_temp_anomaly"])
+            row_to_insert.append(flags["is_pressure_anomaly"])
+            row_to_insert.append(flags["is_process_excursion"])
+            row_to_insert.append(flags["is_flow_level_anomaly"])
+            row_to_insert.append(flags["is_stuck_sensor"])
+            row_to_insert.append(flags["is_plant_shutdown"])
+            row_to_insert.append(flags["is_boiler_anomaly"])
+            row_to_insert.append(flags["imputed_with"])
+            
+            # The timestamp is the first value
+            final_row = [minute_data["DateAndTime"]] + row_to_insert
+            cleaned_data_to_insert.append(final_row)
+        
+        # Insert cleaned data into the table
+        if cleaned_data_to_insert:
+            columns_str = ", ".join([f'"{t[1]}"' for t in tag_data])
+            flag_columns_str = ", ".join([
+                '"is_faulty_sensor"', '"is_temp_anomaly"', '"is_pressure_anomaly"',
+                '"is_process_excursion"', '"is_flow_level_anomaly"', '"is_stuck_sensor"',
+                '"is_plant_shutdown"', '"is_boiler_anomaly"', '"imputed_with"'
+            ])
+            
+            insert_query = f"""
+            INSERT INTO "{PG_CLEANED_TABLE}" ("DateAndTime", {columns_str}, {flag_columns_str})
+            VALUES (%s, {', '.join(['%s'] * len(tag_data))}, {', '.join(['%s'] * 9)})
+            ON CONFLICT ("DateAndTime") DO NOTHING;
+            """
+            pg_cursor.executemany(insert_query, cleaned_data_to_insert)
+            pg_conn.commit()
+            print(f"✅ Successfully inserted {len(cleaned_data_to_insert)} new rows into {PG_CLEANED_TABLE}.")
+        else:
+            print("No new data to insert.")
+
+    except psycopg2.Error as e:
+        print(f"❌ PostgreSQL connection or query failed. Error: {e}", file=sys.stderr)
+    except Exception as e:
+        print(f"❌ An unexpected error occurred: {e}", file=sys.stderr)
+    finally:
+        if pg_conn:
+            pg_conn.close()
+            print("\nDatabase connection closed.")
+
+if __name__ == "__main__":
+    start_dt = datetime.strptime(START_DATE, '%Y-%m-%d %H:%M:%S')
+    end_dt = datetime.strptime(END_DATE, '%Y-%m-%d %H:%M:%S')
+    process_scada_data_in_range(start_dt, end_dt)
