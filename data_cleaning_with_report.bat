@@ -1,19 +1,20 @@
 @echo off
-:: data_cleaning_batch_run.bat
-:: This batch file sets up and runs the SCADA data cleaning and reporting script for a specific date range.
+:: scada_data_processor.bat
+:: This batch file sets up and runs the SCADA data cleaning and reporting script.
+:: It is designed for non-technical users and automates all setup.
 
 :: --- CONFIGURATION (UPDATE THESE PATHS) ---
 :: The name of the virtual environment to create/use.
 SET "VENV_NAME=scada_venv"
 
-:: The full directory path where your script and the venv will be located.
+:: The full directory path where your script will be located.
 :: Example: SET "SCRIPT_DIR=C:\Users\YourUser\Documents\SCADA_Scripts"
 SET "SCRIPT_DIR=C:\Path\To\Your\Script"
 
 :: The name of your Python script file.
 SET "SCRIPT_NAME=scada_data_cleaning_report.py"
 
-:: The directory where you want to save the log files.
+:: The directory where you want to save log files.
 SET "LOG_DIR=%SCRIPT_DIR%\logs"
 
 :: --- EXECUTION ---
