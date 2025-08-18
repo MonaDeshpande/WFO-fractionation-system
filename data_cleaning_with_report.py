@@ -13,7 +13,7 @@ PG_PORT = "5432"
 PG_USER = "postgres"
 PG_PASSWORD = "ADMIN"  # <-- IMPORTANT: Add your PostgreSQL password here
 PG_DB_NAME = "scada_data_analysis"
-PG_RAW_TABLE = "raw_data"
+PG_RAW_TABLE = "wide_scada_data"
 PG_MAPPING_TABLE = "tag_mapping"
 PG_CLEANED_TABLE = "cleaned_scada_data_report"
 TAGS_CSV_FILE = "TAG_INDEX_FINAL.csv"
@@ -22,7 +22,7 @@ TAGS_CSV_FILE = "TAG_INDEX_FINAL.csv"
 # Placeholder: Change this to your desired start and end date for a single run.
 # The format must be 'YYYY-MM-DD HH:MM:SS'.
 START_DATE = "2025-08-08 00:00:00"
-END_DATE = "2024-08-15 00:00:00" # Set an end date for a batch run
+END_DATE = "2025-08-15 00:00:00" # Set an end date for a batch run
 
 # Faulty value constant
 FAULTY_VALUE = 32767
