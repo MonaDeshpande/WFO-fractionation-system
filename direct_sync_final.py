@@ -15,12 +15,12 @@ PG_HOST = "localhost"
 PG_PORT = "5432"
 PG_USER = "postgres"
 PG_PASSWORD = "ADMIN"  # <-- IMPORTANT: Add your PostgreSQL password here
-PG_DB_NAME = "scada_data624"
-PG_TABLE_NAME = "scada_data_streamlined624"
+PG_DB_NAME = "scada_data_analysis"
+PG_TABLE_NAME = "raw_data"
 
 # --- Add your desired start date here in 'YYYY-MM-DD' format ---
 # This will ONLY be used if the PostgreSQL table is completely empty.
-START_DATE = "2024-01-01" 
+START_DATE = "2025-08-08" 
 # ==============================================================================
 
 # ==============================================================================
@@ -92,8 +92,10 @@ def run_sync():
             except Exception as e:
                 print(f"❌ An unexpected error occurred: {e}", file=sys.stderr)
             finally:
-                if sql_conn: sql_conn.close()
-                if pg_conn: pg_conn.close()
+                if sql_conn: 
+                    sql_conn.close()
+                if pg_conn: 
+                    pg_conn.close()
 
             print("--- Waiting for 60 seconds before next sync cycle... ---")
             time.sleep(60)
