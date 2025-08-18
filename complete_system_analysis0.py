@@ -111,55 +111,36 @@ def create_word_report(df, filename, column_objectives):
     doc.save(filename)
     print(f"Report saved as {filename}")
 
-def get_data_from_db(start_date, end_date):
+def get_data_from_db(start_date, end_date, table_name):
     """
     Connects to the PostgreSQL database and fetches the data.
-    IMPORTANT: You must fill in your database credentials and table names.
     """
     conn = None
     df = pd.DataFrame()
     try:
         conn = psycopg2.connect(
-            dbname="your_db_name",
-            user="your_user_name",
-            password="your_password",
-            host="your_host",
-            port="your_port"
+            dbname="scada_data_analysis",
+            user="postgres",
+            password="ADMIN",
+            host="localhost",
+            port="5432"
         )
         print("Database connection successful.")
         
+        # The query now uses the provided table_name variable
         query = f"""
         SELECT 
-            t1."DateAndTime" AS datetime,
-            t1."PTT-04", t1."TI-61", t1."TI-63", t1."TI-64", t1."TI-110", t1."TI-112", t1."TI-01", t1."FT-02",
-            t2."TI-30", t2."TI-207", t2."TI-208", t2."TI-72A", t2."TI-72B", t2."TI-106", t2."TI-209", t2."TI-210",
-            t3."TI-04", t3."TI-05", t3."TI-06", t3."TI-07", t3."TI-08", t3."TI-09", t3."TI-10", t3."TI-11",
-            t4."FT-01", t4."FT-62", t4."FT-61", t4."LT-61", t4."PTB-04", t4."PTT-04",
-            t5."TI-31", t5."TI-32", t5."TI-33", t5."TI-34", t5."TI-35", t5."TI-36", t5."TI-37", t5."TI-38",
-            t6."TI-22", t6."TI-23", t6."TI-24", t6."TI-25", t6."TI-26", t6."TI-27", t6."TI-28", t6."TI-29",
-            t7."TI-210" AS "TI-210_copy", t7."FT-10", t7."FT-07", t7."FT-04", t7."LT-05", t7."LT-06", t7."PTB-03", t7."PTT-03",
-            t8."TI-39", t8."TI-40", t8."TI-41", t8."TI-42", t8."TI-45", t8."TI-54", t8."TI-55", t8."TI-42A",
-            t9."FT-09", t9."FT-06", t9."LT-03", t9."LT-04", t9."PTB-02", t9."PTT-02", t9."TI-13",
-            t10."TI-14", t10."TI-15", t10."TI-16", t10."TI-17", t10."TI-18", t10."TI-19", t10."TI-20", t10."TI-21"
+            *
         FROM 
-            "table_for_IMG-20250814-WA0115.jpg" AS t1
-            JOIN "table_for_IMG-20250814-WA0118.jpg" AS t2 ON t1."row_id" = t2."row_id"
-            JOIN "table_for_IMG-20250814-WA0116.jpg" AS t3 ON t1."row_id" = t3."row_id"
-            JOIN "table_for_IMG-20250814-WA0114.jpg" AS t4 ON t1."row_id" = t4."row_id"
-            JOIN "table_for_IMG-20250814-WA0120.jpg" AS t5 ON t1."row_id" = t5."row_id"
-            JOIN "table_for_IMG-20250814-WA0117.jpg" AS t6 ON t1."row_id" = t6."row_id"
-            JOIN "table_for_IMG-20250814-WA0119.jpg" AS t7 ON t1."row_id" = t7."row_id"
-            JOIN "table_for_IMG-20250814-WA0121.jpg" AS t8 ON t1."row_id" = t8."row_id"
-            JOIN "table_for_IMG-20250814-WA0124.jpg" AS t9 ON t1."row_id" = t9."row_id"
-            JOIN "table_for_IMG-20250814-WA0123.jpg" AS t10 ON t1."row_id" = t10."row_id"
+            "{table_name}"
         WHERE 
             "DateAndTime" BETWEEN '{start_date}' AND '{end_date}'
         ORDER BY 
             "DateAndTime";
         """
         df = pd.read_sql(query, conn)
-        df['datetime'] = pd.to_datetime(df['datetime'])
-
+        df['datetime'] = pd.to_datetime(df['DateAndTime'])
+        
     except (Exception, psycopg2.DatabaseError) as error:
         print(error)
     finally:
@@ -169,18 +150,12 @@ def get_data_from_db(start_date, end_date):
 
 if __name__ == '__main__':
     # --- USER INPUT SECTION ---
-    # Database connection details
-    db_credentials = {
-        'dbname': 'your_db_name',
-        'user': 'your_user_name',
-        'password': 'your_password',
-        'host': 'your_host',
-        'port': 'your_port'
-    }
+    # Database table name
+    table_to_analyze = 'data_cleaning_with_report'
 
     # Time range for analysis
     start_time = '2025-08-08 00:00:00'
-    end_time = '2025-08-18 23:59:59'
+    end_time = '2025-08-14 23:59:59'
 
     # Output file name
     output_filename = 'Distillation_Column_Report.docx'
@@ -203,10 +178,10 @@ if __name__ == '__main__':
     # --------------------------
 
     # Step 1: Get data from PostgreSQL
-    full_df = get_data_from_db(start_time, end_time)
+    full_df = get_data_from_db(start_time, end_time, table_to_analyze)
     
     if not full_df.empty:
         # Step 2: Create the Word report with analysis
         create_word_report(full_df, output_filename, column_objectives)
     else:
-        print("No data found in the specified time range. Please check your date range and database connection.")
+        print("No data found in the specified time range. Please check your table name, date range and database connection.")
