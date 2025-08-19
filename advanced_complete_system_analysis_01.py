@@ -308,7 +308,7 @@ def detect_anomalies_kmeans(df, tags, n_clusters=3, contamination=0.05):
     Returns a list of timestamps flagged as anomalous.
     """
     data = df[tags].dropna()
-    if data.empty:
+    if data.empty or data.shape[0] < n_clusters:
         log_and_print("Not enough data to perform anomaly detection.", 'warning')
         return []
         
@@ -463,7 +463,7 @@ def export_kpis_to_excel(kpi_data, filename):
 
 # --------------- REPORT -------------------------------------------------------
 
-def create_word_report(df, lab_results_df, filename, start_time, end_time, baseline_df=None):
+def create_word_report(df, lab_results_df, filename, start_time, end_time):
     """Creates a comprehensive Word report with advanced analysis."""
     doc = Document()
     doc.add_heading('Naphthalene Recovery Plant: Advanced Distillation Analysis', 0)
@@ -492,7 +492,7 @@ def create_word_report(df, lab_results_df, filename, start_time, end_time, basel
 
     # ---------- C-00 Moisture Removal ----------
     c00 = COLUMN_ANALYSIS['C-00']; tags = c00['tags']
-    doc.add_heading('2. C-00 (Dehydration) — Material Balance & Performance', level=1)
+    doc.add_heading('2. C-00 (Dehydration) – Material Balance & Performance', level=1)
     doc.add_paragraph("Purpose: This column is a preliminary separation stage designed to remove moisture and light impurities from the raw feed before it enters the main distillation columns. Efficient dehydration is crucial to prevent process instability and hydrate formation in downstream units.")
     
     if have_cols(df, [tags.get('feed'), tags.get('top_flow'), tags.get('bottom_flow')]):
@@ -616,7 +616,12 @@ def create_word_report(df, lab_results_df, filename, start_time, end_time, basel
                 fig, ax = plt.subplots(figsize=(10, 4))
                 pd.to_numeric(df[tags['reflux_flow']], errors='coerce').plot(ax=ax, label='Historical')
                 forecast_df['forecast'].plot(ax=ax, label='Forecast', color='red')
-                ax.fill_between(forecast_df.index, forecast_df['lower reflux_flow'], forecast_df['upper reflux_flow'], color='r', alpha=.15)
+                
+                # FIX: Access confidence interval columns dynamically
+                lower_ci_col = forecast_df.columns[0]
+                upper_ci_col = forecast_df.columns[1]
+                ax.fill_between(forecast_df.index, forecast_df[lower_ci_col], forecast_df[upper_ci_col], color='r', alpha=.15)
+                
                 ax.set_title(f"{tags['reflux_flow']} ARIMA Forecast")
                 ax.legend()
                 fig.tight_layout()
@@ -674,6 +679,6 @@ if __name__ == "__main__":
         # Note: You would need to collect KPIs into a list within the create_word_report function
         # For simplicity, this is not implemented yet but the placeholder is here
         kpis_to_export = []
-        export_kpis_to_excel(kpis_to_export, excel_filename)
+        # export_kpis_to_excel(kpis_to_export, excel_filename)
 
 log_and_print("Script finished.")
