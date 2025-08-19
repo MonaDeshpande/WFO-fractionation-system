@@ -128,8 +128,8 @@ def create_word_report(df, lab_results_df, filename):
             temp_profile_cols = [tag for tag in tags.get('temp_profile', []) if tag in df.columns]
 
             if reflux_flow in df.columns and top_product_flow in df.columns:
-                # Handle division by zero gracefully
-                df['reflux_ratio'] = df.apply(lambda row: row[reflux_flow] / row[top_product_flow] if row[top_product_flow] != 0 else 0, axis=1)
+                # Handle division by zero gracefully and ensure the result is always positive
+                df['reflux_ratio'] = df.apply(lambda row: abs(row[reflux_flow] / row[top_product_flow]) if row[top_product_flow] != 0 else 0, axis=1)
 
                 doc.add_heading('Key Process Metrics', level=2)
                 doc.add_paragraph(f"**Data Points Considered:** {len(df.index):,} total points.")
@@ -225,7 +225,7 @@ def create_word_report(df, lab_results_df, filename):
                                     plt.savefig(purity_plot_filename)
                                     doc.add_picture(purity_plot_filename, width=Inches(6))
                                     doc.add_paragraph(f"The chart above shows the purity trend for the {product_name} product over time. The mean, median, and mode values are marked to indicate the central tendency of the data. The target value is also shown for easy comparison.")
-                                    os.remove(purity_plot_filename) # Clean up the file
+                                    # os.remove(purity_plot_filename) # Clean up the file
                                 except KeyError:
                                     doc.add_paragraph(f"Error: Could not find the purity column '{purity_col}' for this sample. Analysis skipped.")
                                     continue
@@ -253,7 +253,7 @@ def create_word_report(df, lab_results_df, filename):
                     plt_filename = f'plot_{column_name}_feed_temp.png'
                     plt.savefig(plt_filename)
                     doc.add_picture(plt_filename, width=Inches(6))
-                    os.remove(plt_filename) # Clean up the file
+                    # os.remove(plt_filename) # Clean up the file
                 else:
                     doc.add_paragraph(f"Feed Temperature ({feed_temp_col}) Data Not Found")
                 
@@ -269,7 +269,7 @@ def create_word_report(df, lab_results_df, filename):
                     plt_filename = f'plot_{column_name}_reflux_ratio.png'
                     plt.savefig(plt_filename)
                     doc.add_picture(plt_filename, width=Inches(6))
-                    os.remove(plt_filename) # Clean up the file
+                    # os.remove(plt_filename) # Clean up the file
                 else:
                     doc.add_paragraph('Reflux Ratio Data Not Found')
 
@@ -288,7 +288,7 @@ def create_word_report(df, lab_results_df, filename):
                     plt_filename = f'plot_{column_name}_temp_profile.png'
                     plt.savefig(plt_filename)
                     doc.add_picture(plt_filename, width=Inches(6))
-                    os.remove(plt_filename) # Clean up the file
+                    # os.remove(plt_filename) # Clean up the file
                 else:
                     doc.add_paragraph("Temperature profile data was not available. This is a crucial metric for packed column performance and should be monitored.")
 
