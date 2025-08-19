@@ -22,7 +22,7 @@ COLUMN_ANALYSIS = {
             'feed_temp': 'TI-02',
             'temp_profile': ['TI-03', 'TI-04', 'TI-05', 'TI-06'] # These sensors define the packed bed's temp profile
         },
-        'lab_samples': [{'sample': 'C-01-B', 'product': 'Naphthalene', 'target': 2}]
+        'lab_samples': [{'sample': 'C-01-B', 'product': 'Naphthalene Oil', 'purity_col': '% of naphthalene oil', 'target': 2}]
     },
     'C-02': {
         'purpose': 'To produce a top product (Light Oil) with less than 15% naphthalene.',
@@ -32,7 +32,7 @@ COLUMN_ANALYSIS = {
             'feed_temp': 'TI-11',
             'temp_profile': ['TI-13', 'TI-14', 'TI-15', 'TI-16', 'TI-17', 'TI-18', 'TI-19', 'TI-20', 'TI-21', 'TI-22', 'TI-23', 'TI-24', 'TI-25']
         },
-        'lab_samples': [{'sample': 'C-02-T', 'product': 'Naphthalene', 'target': 15}]
+        'lab_samples': [{'sample': 'C-02-T', 'product': 'Light Oil', 'purity_col': '% of naphthalene oil', 'target': 15}]
     },
     'C-03': {
         'purpose': 'To recover maximum naphthalene from the top and produce pure wash oil at the bottom (max 2% naphthalene).',
@@ -43,8 +43,8 @@ COLUMN_ANALYSIS = {
             'temp_profile': ['TI-31', 'TI-32', 'TI-33', 'TI-34', 'TI-35', 'TI-36', 'TI-37', 'TI-38', 'TI-39', 'TI-40']
         },
         'lab_samples': [
-            {'sample': 'C-03-T', 'product': 'Naphthalene', 'target': None}, # No specific target, just 'as high as possible'
-            {'sample': 'C-03-B', 'product': 'Naphthalene', 'target': 2}
+            {'sample': 'C-03-T', 'product': 'Naphthalene Oil', 'purity_col': '% of naphthalene oil', 'target': None}, # No specific target, just 'as high as possible'
+            {'sample': 'C-03-B', 'product': 'Wash Oil', 'purity_col': '% of naphthalene oil', 'target': 2}
         ]
     }
 }
@@ -146,24 +146,15 @@ def create_word_report(df, lab_results_df, filename):
                             sample_name = sample_info['sample']
                             product_name = sample_info['product']
                             target_percent = sample_info['target']
+                            purity_col = sample_info['purity_col']
 
                             # Use the correct column names from the user's CSV
                             purity_result = lab_results_df[lab_results_df['column'] == sample_name]
 
                             if not purity_result.empty:
-                                # Determine which column to use based on the product name
-                                # You will need to manually match the product name to the correct column header
-                                if product_name == 'Naphthalene':
-                                    value_col = '% of naphthalene oil' 
-                                elif product_name == 'Anthracene Oil':
-                                    # Handle this case if needed
-                                    value_col = 'some other column'
-                                else:
-                                    value_col = '% of naphthalene oil' # Defaulting to this column for other products
-
-                                # Use a try-except block to handle cases where the product name doesn't match a column
+                                # Now we use the explicit purity_col from the dictionary
                                 try:
-                                    value = purity_result[value_col].iloc[0]
+                                    value = purity_result[purity_col].iloc[0]
                                 except KeyError:
                                     doc.add_paragraph(f"Error: Could not find a suitable column for product '{product_name}'. Purity analysis for this sample was skipped.")
                                     continue
@@ -251,7 +242,7 @@ def get_data_from_db(start_date, end_date, table_name):
         FROM
             "{table_name}"
         WHERE
-            "DateAndTime" BETWEEN '{start_date}' AND '{end_date}'
+            "DateAndTime" BETWEEN '{start_date}' AND '{end_time}'
         ORDER BY
             "DateAndTime";
         """
