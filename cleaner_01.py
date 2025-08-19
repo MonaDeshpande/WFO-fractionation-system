@@ -13,13 +13,13 @@ PG_PORT = "5432"
 PG_USER = "postgres"
 PG_PASSWORD = "ADMIN"  # <-- IMPORTANT: Add your PostgreSQL password here
 PG_DB_NAME = "scada_data_analysis"
-PG_RAW_TABLE = "wide_scada_data"
+PG_RAW_TABLE = "raw_data"
 PG_MAPPING_TABLE = "tag_mapping"
-PG_CLEANED_TABLE = "cleaned_scada_data_report"
+PG_CLEANED_TABLE = "data_cleaning_with_report"
 TAGS_CSV_FILE = "TAG_INDEX_FINAL.csv"
 
 # --- USER INPUT ---
-START_DATE = "2025-08-08 00:00:00"
+START_DATE = "2025-08-08 00:00:40"
 END_DATE = "2025-08-15 00:00:00"
 
 # Faulty value constant
@@ -125,7 +125,6 @@ def is_stuck_sensor(pg_cursor, tag_name, start_date):
     pg_cursor.execute(query, (tag_name, historical_start, start_date))
     unique_values = pg_cursor.fetchone()[0]
     return unique_values <= 1
-
 
 def generate_excel_report(summary_data, detail_log, start_dt, end_dt):
     """Generates an Excel report with summary and detailed logs."""
@@ -311,8 +310,8 @@ def process_scada_data_in_range(start_timestamp, end_timestamp):
             final_row_values.append(flags["is_faulty_sensor"])
             final_row_values.append(flags["is_temp_anomaly"])
             final_row_values.append(flags["is_pressure_anomaly"])
-            final_row_values.append(flags["is_process_excursion"]) # This flag isn't used in this script but is kept for consistency.
-            final_row_values.append(flags["is_flow_level_anomaly"]) # This flag isn't used but is kept for consistency.
+            final_row_values.append(flags["is_process_excursion"])
+            final_row_values.append(flags["is_flow_level_anomaly"])
             final_row_values.append(flags["is_stuck_sensor"])
             final_row_values.append(flags["is_plant_shutdown"])
             final_row_values.append(flags["is_boiler_anomaly"])
