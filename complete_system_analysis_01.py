@@ -140,7 +140,7 @@ def create_word_report(df, lab_results_df, filename):
 
                 if not lab_results_df.empty:
                     # Check for required columns before proceeding
-                    required_columns = ['column', '% of napth', '% of napthalene oil']
+                    required_columns = ['column', '% of naphthalene oil in following', '% of naphthalene oil']
                     if all(col in lab_results_df.columns for col in required_columns):
                         for sample_info in details['lab_samples']:
                             sample_name = sample_info['sample']
@@ -154,12 +154,12 @@ def create_word_report(df, lab_results_df, filename):
                                 # Determine which column to use based on the product name
                                 # You will need to manually match the product name to the correct column header
                                 if product_name == 'Naphthalene':
-                                    value_col = '% of napth' # or '% of napthalene oil', depending on the sample
+                                    value_col = '% of naphthalene oil' 
                                 elif product_name == 'Anthracene Oil':
                                     # Handle this case if needed
                                     value_col = 'some other column'
                                 else:
-                                    value_col = '% of napthalene oil' # Defaulting to this column for other products
+                                    value_col = '% of naphthalene oil' # Defaulting to this column for other products
 
                                 # Use a try-except block to handle cases where the product name doesn't match a column
                                 try:
@@ -179,8 +179,8 @@ def create_word_report(df, lab_results_df, filename):
                             else:
                                 doc.add_paragraph(f"Lab results for sample '{sample_name}' were not found. Purity could not be assessed.")
                     else:
-                        doc.add_paragraph("Note: The 'purity_lab_result.csv' file is missing one or more of the required columns ('column', '% of napth', '% of napthalene oil'). Purity analysis was skipped.")
-                        print("Error: The CSV file 'purity_lab_result.csv' is missing one or more required columns ('column', '% of napth', '% of napthalene oil'). Please check the column names.")
+                        doc.add_paragraph("Note: The 'purity_lab_result.csv' file is missing one or more of the required columns ('column', '% of naphthalene oil in following', '% of naphthalene oil'). Purity analysis was skipped.")
+                        print("Error: The CSV file 'purity_lab_result.csv' is missing one or more required columns ('column', '% of naphthalene oil in following', '% of naphthalene oil'). Please check the column names.")
                 else:
                     doc.add_paragraph("Note: Lab results data ('purity_lab_result.csv') was not available. Skipping purity analysis.")
 
