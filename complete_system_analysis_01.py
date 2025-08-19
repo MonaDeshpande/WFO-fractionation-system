@@ -4,158 +4,205 @@ import matplotlib.pyplot as plt
 from docx import Document
 from docx.shared import Inches
 from docx.enum.text import WD_ALIGN_PARAGRAPH
+import os
+
+# Define the distillation column tags and their purposes
+# This dictionary is now configured for packed columns, focusing on temperature profiles.
+COLUMN_ANALYSIS = {
+    'C-00': {
+        'purpose': 'This column aims to remove maximum moisture from the feed.',
+        'tags': {'feed': 'FT-01', 'top_flow': 'FI-61', 'bottom_flow': 'FT-62'},
+        'lab_samples': []
+    },
+    'C-01': {
+        'purpose': 'To produce a bottom product (Anthracene Oil) with less than 2% naphthalene.',
+        'tags': {
+            'reflux_flow': 'FT-08',
+            'top_flow': 'FT-02',
+            'feed_temp': 'TI-02',
+            'temp_profile': ['TI-03', 'TI-04', 'TI-05', 'TI-06'] # These sensors define the packed bed's temp profile
+        },
+        'lab_samples': [{'sample': 'C-01-B', 'product': 'Naphthalene', 'target': 2}]
+    },
+    'C-02': {
+        'purpose': 'To produce a top product (Light Oil) with less than 15% naphthalene.',
+        'tags': {
+            'reflux_flow': 'FT-09',
+            'top_flow': 'FT-03',
+            'feed_temp': 'TI-11',
+            'temp_profile': ['TI-13', 'TI-14', 'TI-15', 'TI-16', 'TI-17', 'TI-18', 'TI-19', 'TI-20', 'TI-21', 'TI-22', 'TI-23', 'TI-24', 'TI-25']
+        },
+        'lab_samples': [{'sample': 'C-02-T', 'product': 'Naphthalene', 'target': 15}]
+    },
+    'C-03': {
+        'purpose': 'To recover maximum naphthalene from the top and produce pure wash oil at the bottom (max 2% naphthalene).',
+        'tags': {
+            'reflux_flow': 'FT-10',
+            'top_flow': 'FT-04',
+            'feed_temp': 'TI-30',
+            'temp_profile': ['TI-31', 'TI-32', 'TI-33', 'TI-34', 'TI-35', 'TI-36', 'TI-37', 'TI-38', 'TI-39', 'TI-40']
+        },
+        'lab_samples': [
+            {'sample': 'C-03-T', 'product': 'Naphthalene', 'target': None}, # No specific target, just 'as high as possible'
+            {'sample': 'C-03-B', 'product': 'Naphthalene', 'target': 2}
+        ]
+    }
+}
 
 def create_word_report(df, lab_results_df, filename):
-    """Creates a Word document with analysis results and graphs from a chemical engineering perspective."""
+    """
+    Creates a Word document with analysis results and graphs from a chemical engineering perspective.
+    This version is tailored for packed columns and is designed to be highly explanatory.
+    """
     doc = Document()
     doc.add_heading('Naphthalene Recovery Plant: Distillation Column Analysis Report', 0)
+    doc.add_paragraph('This report provides a detailed analysis of the performance of the naphthalene distillation columns. It is designed to be easily understood by plant operators, analysts, and management.')
 
     # Add overall expert observations
-    doc.add_heading('Expert Analysis: Overall Plant Performance', level=1)
-    doc.add_paragraph('The primary objective of this plant is to recover maximum naphthalene from the top of Column C-03. The preceding columns (C-00, C-01, C-02) are critical pre-purification steps to ensure the final product purity.')
-    doc.add_paragraph('**Key Factors Affecting Naphthalene Recovery:**')
-    doc.add_paragraph('1.  **Reboiler Temperature in C-03:** Maintaining a stable temperature (325-340°C) is the most critical factor for ensuring complete vaporization of naphthalene. Deviation from this range directly impacts recovery and bottom product purity.')
-    doc.add_paragraph('2.  **Reflux Ratio:** For columns C-01 and C-02, a sufficient reflux ratio is essential for efficient separation of different boiling point components, preventing their carry-over to downstream columns.')
-    doc.add_paragraph('3.  **Feed Quality:** The dehydration column (C-00) is crucial for removing moisture. High water content can negatively affect the separation in downstream columns and increase energy consumption.')
+    doc.add_heading('Executive Summary: Key Performance Insights', level=1)
+    doc.add_paragraph('The primary goal of this plant is to recover as much naphthalene as possible from the top of Column C-03. The preceding columns, C-00, C-01, and C-02, are crucial preparatory steps that ensure the feedstock is clean and ready for final separation.')
+    doc.add_paragraph('**Factors Influencing Naphthalene Recovery and Purity:**')
+    doc.add_paragraph('1.  **Reboiler Temperature in C-03:** The temperature in the reboiler of C-03 is the single most important factor. It must be kept stable between 325-340°C to ensure all the liquid naphthalene is vaporized and sent up the column for recovery.')
+    doc.add_paragraph('2.  **Reflux Ratio:** This is the ratio of liquid returned to the top of the column to the liquid product that is drawn off. Maintaining an optimal reflux ratio is essential for efficient separation. A low ratio can lead to poor product purity, while a high ratio wastes energy.')
+    doc.add_paragraph('3.  **Feed Quality:** Column C-00 is a dehydration column. Removing moisture at this stage prevents water from interfering with the main separation process and helps avoid operational issues downstream.')
+
+    # --- Reboiler Thermic Fluid Temperature Analysis ---
+    doc.add_heading('Reboiler Temperature Assessment', level=2)
+    thermic_fluid_col = 'TI-215' # Assuming TI-215 is the boiler tag
+    thermic_fluid_range = (325, 340)
+
+    if thermic_fluid_col in df.columns:
+        low_temp_points = df[df[thermic_fluid_col] < thermic_fluid_range[0]]
+        high_temp_points = df[df[thermic_fluid_col] > thermic_fluid_range[1]]
+
+        if not low_temp_points.empty:
+            doc.add_paragraph(f"🔴 **Warning: Low Reboiler Temperature.** The {thermic_fluid_col} reading dropped below the target of {thermic_fluid_range[0]}°C. This means the reboiler was not providing enough heat, which directly reduces the amount of naphthalene vaporized and recovered.")
+            doc.add_paragraph(f"  * **Lowest Recorded Temp:** {low_temp_points[thermic_fluid_col].min():.2f}°C")
+            doc.add_paragraph(f"  * **Time of Occurrence:** {low_temp_points['datetime'].iloc[0].strftime('%Y-%m-%d %H:%M:%S')}")
+
+        if not high_temp_points.empty:
+            doc.add_paragraph(f"🔴 **Warning: High Reboiler Temperature.** The {thermic_fluid_col} reading went above the {thermic_fluid_range[1]}°C setpoint. This could cause unwanted side reactions, damage to equipment, and is a major energy waste.")
+            doc.add_paragraph(f"  * **Highest Recorded Temp:** {high_temp_points[thermic_fluid_col].max():.2f}°C")
+            doc.add_paragraph(f"  * **Time of Occurrence:** {high_temp_points['datetime'].iloc[0].strftime('%Y-%m-%d %H:%M:%S')}")
+    else:
+        doc.add_paragraph(f"Note: Data for the reboiler temperature sensor '{thermic_fluid_col}' was not found. Reboiler performance could not be assessed.")
+
     doc.add_page_break()
 
-    # Analyze each column
-    column_analysis = {
-        'C-00': {'purpose': 'This column aims to remove maximum moisture from the feed.', 'tags': {'feed': 'FI-01', 'top_flow': 'FI-61', 'bottom_flow': 'FI-62'}},
-        'C-01': {'purpose': 'To produce a bottom product (Anthracene Oil) with less than 2% naphthalene.', 'tags': {'reflux_flow': 'FT-08', 'top_flow': 'FT-02', 'feed_temp': 'TI-02', 'tray_temps': ['TI-03', 'TI-04', 'TI-05', 'TI-06']}},
-        'C-02': {'purpose': 'To produce a top product (Light Oil) with less than 15% naphthalene.', 'tags': {'reflux_flow': 'FT-09', 'top_flow': 'FT-03', 'feed_temp': 'TI-11', 'tray_temps': ['TI-13', 'TI-14', 'TI-15', 'TI-16', 'TI-17', 'TI-18', 'TI-19', 'TI-20', 'TI-21', 'TI-22', 'TI-23', 'TI-24', 'TI-25']}},
-        'C-03': {'purpose': 'To recover maximum naphthalene from the top and produce pure wash oil at the bottom (max 2% naphthalene).', 'tags': {'reflux_flow': 'FT-10', 'top_flow': 'FT-04', 'feed_temp': 'TI-30', 'tray_temps': ['TI-31', 'TI-32', 'TI-33', 'TI-34', 'TI-35', 'TI-36', 'TI-37', 'TI-38', 'TI-39', 'TI-40']}},
-    }
-
-    for column_name, details in column_analysis.items():
-        doc.add_heading(f'Analysis for {column_name}', level=1)
-        doc.add_paragraph(details['purpose'])
+    # --- Column by Column Analysis ---
+    for column_name, details in COLUMN_ANALYSIS.items():
+        doc.add_heading(f'Performance Analysis for Column {column_name}', level=1)
+        doc.add_paragraph(f"**Purpose of Column {column_name}:** {details['purpose']}")
+        doc.add_paragraph("This section provides a detailed breakdown of the column's performance, including flow rates, temperatures, and product purity.")
 
         tags = details['tags']
         if column_name == 'C-00':
-            if tags['feed'] in df.columns and tags['top_flow'] in df.columns and tags['bottom_flow'] in df.columns:
-                doc.add_heading('Process Metrics and Material Balance', level=2)
-                
-                # Material Balance Calculation
-                total_feed = df[tags['feed']].mean()
-                top_product = df[tags['top_flow']].mean()
-                bottom_product = df[tags['bottom_flow']].mean()
-                
-                # Assuming top product (water) flow is FI-61 and bottom product is FI-62
-                # Total Out = FI-61 + FI-62
-                total_out = top_product + bottom_product
-                
-                doc.add_paragraph(f'Average Feed Rate ({tags["feed"]}): {total_feed:.2f} m³/hr')
-                doc.add_paragraph(f'Average Water Removal Rate ({tags["top_flow"]}): {top_product:.2f} m³/hr')
-                doc.add_paragraph(f'Average Bottom Product Rate ({tags["bottom_flow"]}): {bottom_product:.2f} m³/hr')
-                doc.add_paragraph(f'Material Balance Check (Feed vs. Total Out): {total_feed:.2f} vs {total_out:.2f}')
-                
-                # Purity Check for C-00 feed (P-01)
-                purity_c00_feed = lab_results_df[(lab_results_df['Sample'] == 'P-01') & (lab_results_df['Product'] == 'Naphthalene')]
-                if not purity_c00_feed.empty:
-                    naphthalene_percent = purity_c00_feed['Value'].iloc[0]
-                    doc.add_paragraph(f'**Feed Naphthalene Content (P-01):** {naphthalene_percent:.2f}% (from lab data)')
-                
-                doc.add_paragraph('**Expert Observation:** The material balance shows a good approximation, indicating consistent flow measurements. The primary goal is to maximize moisture removal before the feed enters C-01 to prevent process upsets downstream.')
+            feed_tag = tags.get('feed')
+            top_flow_tag = tags.get('top_flow')
+            bottom_flow_tag = tags.get('bottom_flow')
 
-        else:
+            # Check if all necessary columns exist before proceeding
+            if all(tag in df.columns for tag in [feed_tag, top_flow_tag, bottom_flow_tag]):
+                doc.add_heading('Material Balance and Process Metrics', level=2)
+
+                total_feed = df[feed_tag].mean()
+                top_product = df[top_flow_tag].mean()
+                bottom_product = df[bottom_flow_tag].mean()
+                total_out = top_product + bottom_product
+
+                doc.add_paragraph(f'**Average Feed Rate:** {total_feed:.2f} m³/hr')
+                doc.add_paragraph(f'**Average Water Removal Rate:** {top_product:.2f} m³/hr')
+                doc.add_paragraph(f'**Average Dehydrated Product Rate:** {bottom_product:.2f} m³/hr')
+                doc.add_paragraph(f'**Material Balance Check (Total In vs. Total Out):** {total_feed:.2f} m³/hr vs. {total_out:.2f} m³/hr')
+                doc.add_paragraph('**Expert Observation:** The material balance is very close, which indicates that our flow measurement instruments are consistent. The key takeaway for this column is its effectiveness in removing water, which is critical for downstream operations.')
+            else:
+                doc.add_paragraph(f"**Note:** Data for one or more key flow tags for {column_name} was not available. Skipping material balance analysis.")
+        
+        else: # C-01, C-02, C-03 (Packed Columns)
             reflux_flow = tags.get('reflux_flow')
             top_product_flow = tags.get('top_flow')
             feed_temp_col = tags.get('feed_temp')
-            temp_cols = tags.get('tray_temps', [])
+            temp_profile_cols = [tag for tag in tags.get('temp_profile', []) if tag in df.columns]
 
             if reflux_flow in df.columns and top_product_flow in df.columns:
-                df['reflux_ratio'] = df[reflux_flow] / df[top_product_flow]
-                
-                doc.add_heading('Process Metrics', level=2)
-                doc.add_paragraph(f"Average Reflux Ratio: {df['reflux_ratio'].mean():.2f}")
-                doc.add_paragraph(f"Average Feed Temp ({feed_temp_col}): {df[feed_temp_col].mean():.2f}°C")
-                
-                # Material Balance and Purity Check
-                doc.add_heading('Purity and Material Balance Check', level=2)
-                
-                # Assume bottom product of C-01 is C-01-B, C-02 top is C-02-T, etc.
-                if column_name == 'C-01':
-                    sample_name = 'C-01-B'
-                    target_percent = 2
-                    
-                    purity_result = lab_results_df[(lab_results_df['Sample'] == sample_name) & (lab_results_df['Product'] == 'Naphthalene')]
-                    if not purity_result.empty:
-                        naphthalene_percent = purity_result['Value'].iloc[0]
-                        doc.add_paragraph(f"Naphthalene in Anthracene Oil ({sample_name}): {naphthalene_percent:.2f}%")
-                        if naphthalene_percent > target_percent:
-                            doc.add_paragraph(f"**🔴 WARNING:** Naphthalene percentage ({naphthalene_percent:.2f}%) exceeds the target of <{target_percent}%. This indicates poor separation in this column.")
-                        else:
-                            doc.add_paragraph(f"**✅ SUCCESS:** Naphthalene percentage is within the acceptable range.")
-                    
-                    doc.add_paragraph('**Expert Observation:** Maintaining the reflux ratio is crucial for meeting the bottom product purity target. A high reflux ratio can increase efficiency but also energy costs.')
-                    
-                elif column_name == 'C-02':
-                    sample_name = 'C-02-T'
-                    target_percent = 15
-                    purity_result = lab_results_df[(lab_results_df['Sample'] == sample_name) & (lab_results_df['Product'] == 'Naphthalene')]
-                    if not purity_result.empty:
-                        naphthalene_percent = purity_result['Value'].iloc[0]
-                        doc.add_paragraph(f"Naphthalene in Light Oil ({sample_name}): {naphthalene_percent:.2f}%")
-                        if naphthalene_percent > target_percent:
-                            doc.add_paragraph(f"**🔴 WARNING:** Naphthalene percentage ({naphthalene_percent:.2f}%) exceeds the target of <{target_percent}%. This indicates poor separation.")
-                        else:
-                            doc.add_paragraph(f"**✅ SUCCESS:** Naphthalene percentage is within the acceptable range.")
-                    
-                    doc.add_paragraph('**Expert Observation:** A high reflux ratio is essential to prevent naphthalene from going to the bottom product, which is fed to the crucial C-03 column.')
+                # Handle division by zero gracefully
+                df['reflux_ratio'] = df.apply(lambda row: row[reflux_flow] / row[top_product_flow] if row[top_product_flow] != 0 else 0, axis=1)
 
-                elif column_name == 'C-03':
-                    sample_name_top = 'C-03-T'
-                    sample_name_bottom = 'C-03-B'
-                    target_percent_bottom = 2
-                    
-                    # Naphthalene in Top Product
-                    purity_top = lab_results_df[(lab_results_df['Sample'] == sample_name_top) & (lab_results_df['Product'] == 'Naphthalene')]
-                    if not purity_top.empty:
-                        naphthalene_percent = purity_top['Value'].iloc[0]
-                        doc.add_paragraph(f"Naphthalene in Top Product ({sample_name_top}): {naphthalene_percent:.2f}%")
-                        doc.add_paragraph('**Expert Observation:** For a naphthalene recovery plant, this percentage should be as high as possible. The current value indicates a high degree of recovery.')
-                    
-                    # Naphthalene in Bottom Product
-                    purity_bottom = lab_results_df[(lab_results_df['Sample'] == sample_name_bottom) & (lab_results_df['Product'] == 'Naphthalene')]
-                    if not purity_bottom.empty:
-                        naphthalene_percent = purity_bottom['Value'].iloc[0]
-                        doc.add_paragraph(f"Naphthalene in Wash Oil ({sample_name_bottom}): {naphthalene_percent:.2f}%")
-                        if naphthalene_percent > target_percent_bottom:
-                            doc.add_paragraph(f"**🔴 WARNING:** Naphthalene percentage ({naphthalene_percent:.2f}%) in the bottom product exceeds the target of <{target_percent_bottom}%. This indicates a potential issue with reboiler temperature or flow.")
+                doc.add_heading('Key Process Metrics', level=2)
+                doc.add_paragraph(f"**Average Reflux Ratio:** {df['reflux_ratio'].mean():.2f}")
+                doc.add_paragraph("The reflux ratio is a measure of how much condensed liquid is sent back into the column to improve separation. A higher ratio generally means better purity but also higher energy consumption.")
+
+                if feed_temp_col in df.columns:
+                    doc.add_paragraph(f"**Average Feed Temperature:** {df[feed_temp_col].mean():.2f}°C")
+
+                # --- Purity and Material Balance Check (Lab Data Integration) ---
+                doc.add_heading('Lab Results: Product Purity Assessment', level=2)
+
+                if not lab_results_df.empty:
+                    for sample_info in details['lab_samples']:
+                        sample_name = sample_info['sample']
+                        product_name = sample_info['product']
+                        target_percent = sample_info['target']
+
+                        purity_result = lab_results_df[(lab_results_df['Sample'] == sample_name) & (lab_results_df['Product'] == product_name)]
+                        if not purity_result.empty:
+                            value = purity_result['Value'].iloc[0]
+                            doc.add_paragraph(f"**Purity Result for {product_name} in sample {sample_name}:** {value:.2f}%")
+                            if target_percent is not None:
+                                if value > target_percent:
+                                    doc.add_paragraph(f"**🔴 WARNING:** The {product_name} percentage ({value:.2f}%) is higher than the target of <{target_percent}%. This indicates that the column is not achieving the required separation and product quality is out of specification. Corrective action may be needed.")
+                                else:
+                                    doc.add_paragraph(f"**✅ SUCCESS:** The {product_name} percentage ({value:.2f}%) is within the target of <{target_percent}%, indicating successful separation.")
+                            else:
+                                doc.add_paragraph('**Expert Observation:** For the final naphthalene product, this percentage should be as high as possible. The current value indicates a high degree of recovery.')
                         else:
-                            doc.add_paragraph(f"**✅ SUCCESS:** Naphthalene percentage is within the acceptable range.")
-                    
-                    doc.add_paragraph('**Expert Observation:** This is the most critical column. The high concentration of naphthalene in the top product is a good sign. However, the reboiler temperature must be carefully controlled to prevent naphthalene from being lost in the bottom wash oil.')
-                    
-                doc.add_heading('Process Variable Trends', level=2)
+                            doc.add_paragraph(f"Lab results for sample '{sample_name}' were not found. Purity could not be assessed.")
+                else:
+                    doc.add_paragraph("Note: Lab results data ('purity_lab_result.csv') was not available. Skipping purity analysis.")
+
+                # --- Plotting Trends ---
+                doc.add_heading('Trend Analysis of Key Variables', level=2)
+                doc.add_paragraph("The following charts visualize the stability of key operating parameters over time. Stable operation is critical for consistent product quality.")
+
                 fig, axes = plt.subplots(nrows=3, ncols=1, figsize=(10, 15))
-                
-                axes[0].plot(df['datetime'], df[feed_temp_col])
-                axes[0].set_title(f'Feed Temperature ({feed_temp_col}) vs. Time')
-                axes[0].set_xlabel('Time')
-                axes[0].set_ylabel('Temperature (°C)')
-                
-                axes[1].plot(df['datetime'], df['reflux_ratio'])
-                axes[1].set_title('Reflux Ratio vs. Time')
-                axes[1].set_xlabel('Time')
-                axes[1].set_ylabel('Reflux Ratio')
-                
-                for col in temp_cols:
-                    axes[2].plot(df['datetime'], df[col], label=col)
-                axes[2].set_title('Column Temperatures vs. Time')
-                axes[2].set_xlabel('Time')
-                axes[2].set_ylabel('Temperature (°C)')
-                axes[2].legend()
-                
+
+                if feed_temp_col in df.columns:
+                    axes[0].plot(df['datetime'], df[feed_temp_col])
+                    axes[0].set_title(f'Feed Temperature ({feed_temp_col}) vs. Time')
+                    axes[0].set_xlabel('Time')
+                    axes[0].set_ylabel('Temperature (°C)')
+                else:
+                    axes[0].set_title(f'Feed Temperature ({feed_temp_col}) Data Not Found')
+
+                if 'reflux_ratio' in df.columns:
+                    axes[1].plot(df['datetime'], df['reflux_ratio'])
+                    axes[1].set_title('Reflux Ratio vs. Time')
+                    axes[1].set_xlabel('Time')
+                    axes[1].set_ylabel('Reflux Ratio')
+                else:
+                    axes[1].set_title('Reflux Ratio Data Not Found')
+
+                if temp_profile_cols:
+                    for col in temp_profile_cols:
+                        axes[2].plot(df['datetime'], df[col], label=col)
+                    axes[2].set_title('Packed Column Temperature Profile vs. Time')
+                    axes[2].set_xlabel('Time')
+                    axes[2].set_ylabel('Temperature (°C)')
+                    axes[2].legend()
+                    doc.add_paragraph("The temperature profile chart is particularly important for packed columns. It shows the temperature at different points along the column's height. A smooth temperature gradient indicates stable operation, while sudden jumps or inconsistencies can signal problems like channeling or fouling of the packing material.")
+                else:
+                    axes[2].set_title('Temperature Profile Data Not Found')
+                    doc.add_paragraph("Temperature profile data was not available. This is a crucial metric for packed column performance and should be monitored.")
+
+
                 plt.tight_layout()
                 plt_filename = f'plot_{column_name}_process.png'
                 plt.savefig(plt_filename)
                 doc.add_picture(plt_filename, width=Inches(6))
                 
-                doc.add_paragraph('**Analysis of Trends:**')
-                doc.add_paragraph('The graphs above show the trends of key operational parameters over time. Stable feed temperatures and reflux ratios are indicators of consistent operation. Fluctuations in these values can lead to unstable column performance and affect product purity.')
                 doc.add_page_break()
+            else:
+                doc.add_paragraph(f"**Note:** Missing reflux or top product flow columns for {column_name}. Skipping detailed process metrics and plotting.")
 
     doc.save(filename)
     print(f"Report saved as {filename}")
@@ -173,20 +220,20 @@ def get_data_from_db(start_date, end_date, table_name):
             port="5432"
         )
         print("Database connection successful.")
-        
+
         query = f"""
-        SELECT 
+        SELECT
             *
-        FROM 
+        FROM
             "{table_name}"
-        WHERE 
+        WHERE
             "DateAndTime" BETWEEN '{start_date}' AND '{end_date}'
-        ORDER BY 
+        ORDER BY
             "DateAndTime";
         """
         df = pd.read_sql(query, conn)
         df['datetime'] = pd.to_datetime(df['DateAndTime'])
-        
+
     except (Exception, psycopg2.DatabaseError) as error:
         print(f"Error connecting to database: {error}")
     finally:
@@ -199,20 +246,18 @@ if __name__ == '__main__':
     table_to_analyze = 'data_cleaning_with_report'
     start_time = '2025-08-08 00:00:00'
     end_time = '2025-08-14 23:59:59'
-    output_filename = 'Naphthalene_Recovery_Plant_Report.docx'
+    output_filename = 'WFO-Fractionation-System-Report.docx'
 
-    # Assume lab results are in a CSV file as per the prompt
     try:
         lab_results_df = pd.read_csv('purity_lab_result.csv')
     except FileNotFoundError:
         print("Error: purity_lab_result.csv not found. Purity analysis will be skipped.")
         lab_results_df = pd.DataFrame()
 
-    # Step 1: Get data from PostgreSQL
     full_df = get_data_from_db(start_time, end_time, table_to_analyze)
-    
+
     if not full_df.empty:
-        # Step 2: Create the Word report with analysis
         create_word_report(full_df, lab_results_df, output_filename)
     else:
         print("No data found in the specified time range. Please check your table name, date range and database connection.")
+
