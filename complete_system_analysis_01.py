@@ -5,6 +5,7 @@ from docx import Document
 from docx.shared import Inches
 from docx.enum.text import WD_ALIGN_PARAGRAPH
 import os
+import io
 
 # Define the distillation column tags and their purposes
 # This dictionary is now configured for packed columns, focusing on temperature profiles.
@@ -221,11 +222,15 @@ def create_word_report(df, lab_results_df, filename):
                                     plt.grid(True)
                                     plt.tight_layout()
 
-                                    purity_plot_filename = f'purity_trend_{sample_name}.png'
-                                    plt.savefig(purity_plot_filename)
-                                    doc.add_picture(purity_plot_filename, width=Inches(6))
+                                    # Use a BytesIO object to store the plot in memory
+                                    buffer = io.BytesIO()
+                                    plt.savefig(buffer, format='png')
+                                    buffer.seek(0)
+                                    doc.add_picture(buffer, width=Inches(6))
+                                    buffer.close()
+                                    plt.close() # Close the plot to free up memory
+
                                     doc.add_paragraph(f"The chart above shows the purity trend for the {product_name} product over time. The mean, median, and mode values are marked to indicate the central tendency of the data. The target value is also shown for easy comparison.")
-                                    # os.remove(purity_plot_filename) # Clean up the file
                                 except KeyError:
                                     doc.add_paragraph(f"Error: Could not find the purity column '{purity_col}' for this sample. Analysis skipped.")
                                     continue
@@ -250,10 +255,13 @@ def create_word_report(df, lab_results_df, filename):
                     plt.ylabel('Temperature (°C)')
                     plt.grid(True)
                     plt.tight_layout()
-                    plt_filename = f'plot_{column_name}_feed_temp.png'
-                    plt.savefig(plt_filename)
-                    doc.add_picture(plt_filename, width=Inches(6))
-                    # os.remove(plt_filename) # Clean up the file
+                    # Use a BytesIO object to store the plot in memory
+                    buffer = io.BytesIO()
+                    plt.savefig(buffer, format='png')
+                    buffer.seek(0)
+                    doc.add_picture(buffer, width=Inches(6))
+                    buffer.close()
+                    plt.close() # Close the plot to free up memory
                 else:
                     doc.add_paragraph(f"Feed Temperature ({feed_temp_col}) Data Not Found")
                 
@@ -266,10 +274,13 @@ def create_word_report(df, lab_results_df, filename):
                     plt.ylabel('Reflux Ratio')
                     plt.grid(True)
                     plt.tight_layout()
-                    plt_filename = f'plot_{column_name}_reflux_ratio.png'
-                    plt.savefig(plt_filename)
-                    doc.add_picture(plt_filename, width=Inches(6))
-                    # os.remove(plt_filename) # Clean up the file
+                    # Use a BytesIO object to store the plot in memory
+                    buffer = io.BytesIO()
+                    plt.savefig(buffer, format='png')
+                    buffer.seek(0)
+                    doc.add_picture(buffer, width=Inches(6))
+                    buffer.close()
+                    plt.close() # Close the plot to free up memory
                 else:
                     doc.add_paragraph('Reflux Ratio Data Not Found')
 
@@ -285,10 +296,13 @@ def create_word_report(df, lab_results_df, filename):
                     plt.grid(True)
                     plt.tight_layout()
                     doc.add_paragraph("The temperature profile chart is particularly important for packed columns. It shows the temperature at different points along the column's height. A smooth temperature gradient indicates stable operation, while sudden jumps or inconsistencies can signal problems like channeling or fouling of the packing material.")
-                    plt_filename = f'plot_{column_name}_temp_profile.png'
-                    plt.savefig(plt_filename)
-                    doc.add_picture(plt_filename, width=Inches(6))
-                    # os.remove(plt_filename) # Clean up the file
+                    # Use a BytesIO object to store the plot in memory
+                    buffer = io.BytesIO()
+                    plt.savefig(buffer, format='png')
+                    buffer.seek(0)
+                    doc.add_picture(buffer, width=Inches(6))
+                    buffer.close()
+                    plt.close() # Close the plot to free up memory
                 else:
                     doc.add_paragraph("Temperature profile data was not available. This is a crucial metric for packed column performance and should be monitored.")
 
