@@ -8,9 +8,11 @@ REM Set the name of your main Python script
 SET SCRIPT_NAME=advanced_complete_system_analysis_01.py
 
 REM Set the path to your virtual environment
-REM This is crucial for managing dependencies
 SET VENV_PATH=H:\SCADA_DATA_ANALYSIS\GENERATING_DATA\venv
 REM ----------------
+
+REM Change to the directory where the script is located
+cd /d H:\SCADA_DATA_ANALYSIS\GENERATING_DATA
 
 ECHO.
 ECHO Starting the automated analysis process...
