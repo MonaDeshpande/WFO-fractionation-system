@@ -22,7 +22,7 @@ COLUMN_ANALYSIS = {
             'feed_temp': 'TI-02',
             'temp_profile': ['TI-03', 'TI-04', 'TI-05', 'TI-06'] # These sensors define the packed bed's temp profile
         },
-        'lab_samples': [{'sample': 'C-01-B', 'product': 'Naphthalene Oil', 'purity_col': '% of naphthalene oil', 'target': 2}]
+        'lab_samples': [{'sample': 'C-01-B', 'product': 'Naphthalene Oil', 'target': 2}]
     },
     'C-02': {
         'purpose': 'To produce a top product (Light Oil) with less than 15% naphthalene.',
@@ -32,7 +32,7 @@ COLUMN_ANALYSIS = {
             'feed_temp': 'TI-11',
             'temp_profile': ['TI-13', 'TI-14', 'TI-15', 'TI-16', 'TI-17', 'TI-18', 'TI-19', 'TI-20', 'TI-21', 'TI-22', 'TI-23', 'TI-24', 'TI-25']
         },
-        'lab_samples': [{'sample': 'C-02-T', 'product': 'Light Oil', 'purity_col': '% of naphthalene oil', 'target': 15}]
+        'lab_samples': [{'sample': 'C-02-T', 'product': 'Light Oil', 'target': 15}]
     },
     'C-03': {
         'purpose': 'To recover maximum naphthalene from the top and produce pure wash oil at the bottom (max 2% naphthalene).',
@@ -43,8 +43,8 @@ COLUMN_ANALYSIS = {
             'temp_profile': ['TI-31', 'TI-32', 'TI-33', 'TI-34', 'TI-35', 'TI-36', 'TI-37', 'TI-38', 'TI-39', 'TI-40']
         },
         'lab_samples': [
-            {'sample': 'C-03-T', 'product': 'Naphthalene Oil', 'purity_col': '% of naphthalene oil', 'target': None}, # No specific target, just 'as high as possible'
-            {'sample': 'C-03-B', 'product': 'Wash Oil', 'purity_col': '% of naphthalene oil', 'target': 2}
+            {'sample': 'C-03-T', 'product': 'Naphthalene Oil', 'target': None}, # No specific target, just 'as high as possible'
+            {'sample': 'C-03-B', 'product': 'Wash Oil', 'target': 2}
         ]
     }
 }
@@ -139,24 +139,26 @@ def create_word_report(df, lab_results_df, filename):
                 doc.add_heading('Lab Results: Product Purity Assessment', level=2)
 
                 if not lab_results_df.empty:
-                    # Check for required columns before proceeding
-                    required_columns = ['column', '% of naphthalene oil in following', '% of naphthalene oil']
-                    if all(col in lab_results_df.columns for col in required_columns):
+                    # Find the correct purity column dynamically
+                    purity_col = None
+                    for col in lab_results_df.columns:
+                        if 'naphthalene' in col.lower() or 'napth' in col.lower():
+                            purity_col = col
+                            break # Found a suitable column, stop searching
+
+                    if purity_col:
                         for sample_info in details['lab_samples']:
                             sample_name = sample_info['sample']
                             product_name = sample_info['product']
                             target_percent = sample_info['target']
-                            purity_col = sample_info['purity_col']
 
-                            # Use the correct column names from the user's CSV
                             purity_result = lab_results_df[lab_results_df['column'] == sample_name]
 
                             if not purity_result.empty:
-                                # Now we use the explicit purity_col from the dictionary
                                 try:
                                     value = purity_result[purity_col].iloc[0]
                                 except KeyError:
-                                    doc.add_paragraph(f"Error: Could not find a suitable column for product '{product_name}'. Purity analysis for this sample was skipped.")
+                                    doc.add_paragraph(f"Error: Could not find the purity column '{purity_col}' for this sample. Analysis skipped.")
                                     continue
 
                                 doc.add_paragraph(f"**Purity Result for {product_name} in sample {sample_name}:** {value:.2f}%")
@@ -170,8 +172,8 @@ def create_word_report(df, lab_results_df, filename):
                             else:
                                 doc.add_paragraph(f"Lab results for sample '{sample_name}' were not found. Purity could not be assessed.")
                     else:
-                        doc.add_paragraph("Note: The 'purity_lab_result.csv' file is missing one or more of the required columns ('column', '% of naphthalene oil in following', '% of naphthalene oil'). Purity analysis was skipped.")
-                        print("Error: The CSV file 'purity_lab_result.csv' is missing one or more required columns ('column', '% of naphthalene oil in following', '% of naphthalene oil'). Please check the column names.")
+                        doc.add_paragraph("Note: No suitable purity column was found in the 'purity_lab_result.csv' file. Purity analysis was skipped. Please ensure a column related to 'naphthalene' exists.")
+                        print("Error: The CSV file 'purity_lab_result.csv' is missing a column related to 'naphthalene'.")
                 else:
                     doc.add_paragraph("Note: Lab results data ('purity_lab_result.csv') was not available. Skipping purity analysis.")
 
