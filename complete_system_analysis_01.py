@@ -139,24 +139,48 @@ def create_word_report(df, lab_results_df, filename):
                 doc.add_heading('Lab Results: Product Purity Assessment', level=2)
 
                 if not lab_results_df.empty:
-                    for sample_info in details['lab_samples']:
-                        sample_name = sample_info['sample']
-                        product_name = sample_info['product']
-                        target_percent = sample_info['target']
+                    # Check for required columns before proceeding
+                    required_columns = ['column', '% of napth', '% of napthalene oil']
+                    if all(col in lab_results_df.columns for col in required_columns):
+                        for sample_info in details['lab_samples']:
+                            sample_name = sample_info['sample']
+                            product_name = sample_info['product']
+                            target_percent = sample_info['target']
 
-                        purity_result = lab_results_df[(lab_results_df['Sample'] == sample_name) & (lab_results_df['Product'] == product_name)]
-                        if not purity_result.empty:
-                            value = purity_result['Value'].iloc[0]
-                            doc.add_paragraph(f"**Purity Result for {product_name} in sample {sample_name}:** {value:.2f}%")
-                            if target_percent is not None:
-                                if value > target_percent:
-                                    doc.add_paragraph(f"**🔴 WARNING:** The {product_name} percentage ({value:.2f}%) is higher than the target of <{target_percent}%. This indicates that the column is not achieving the required separation and product quality is out of specification. Corrective action may be needed.")
+                            # Use the correct column names from the user's CSV
+                            purity_result = lab_results_df[lab_results_df['column'] == sample_name]
+
+                            if not purity_result.empty:
+                                # Determine which column to use based on the product name
+                                # You will need to manually match the product name to the correct column header
+                                if product_name == 'Naphthalene':
+                                    value_col = '% of napth' # or '% of napthalene oil', depending on the sample
+                                elif product_name == 'Anthracene Oil':
+                                    # Handle this case if needed
+                                    value_col = 'some other column'
                                 else:
-                                    doc.add_paragraph(f"**✅ SUCCESS:** The {product_name} percentage ({value:.2f}%) is within the target of <{target_percent}%, indicating successful separation.")
+                                    value_col = '% of napthalene oil' # Defaulting to this column for other products
+
+                                # Use a try-except block to handle cases where the product name doesn't match a column
+                                try:
+                                    value = purity_result[value_col].iloc[0]
+                                except KeyError:
+                                    doc.add_paragraph(f"Error: Could not find a suitable column for product '{product_name}'. Purity analysis for this sample was skipped.")
+                                    continue
+
+                                doc.add_paragraph(f"**Purity Result for {product_name} in sample {sample_name}:** {value:.2f}%")
+                                if target_percent is not None:
+                                    if value > target_percent:
+                                        doc.add_paragraph(f"**🔴 WARNING:** The {product_name} percentage ({value:.2f}%) is higher than the target of <{target_percent}%. This indicates that the column is not achieving the required separation and product quality is out of specification. Corrective action may be needed.")
+                                    else:
+                                        doc.add_paragraph(f"**✅ SUCCESS:** The {product_name} percentage ({value:.2f}%) is within the target of <{target_percent}%, indicating successful separation.")
+                                else:
+                                    doc.add_paragraph('**Expert Observation:** For the final naphthalene product, this percentage should be as high as possible. The current value indicates a high degree of recovery.')
                             else:
-                                doc.add_paragraph('**Expert Observation:** For the final naphthalene product, this percentage should be as high as possible. The current value indicates a high degree of recovery.')
-                        else:
-                            doc.add_paragraph(f"Lab results for sample '{sample_name}' were not found. Purity could not be assessed.")
+                                doc.add_paragraph(f"Lab results for sample '{sample_name}' were not found. Purity could not be assessed.")
+                    else:
+                        doc.add_paragraph("Note: The 'purity_lab_result.csv' file is missing one or more of the required columns ('column', '% of napth', '% of napthalene oil'). Purity analysis was skipped.")
+                        print("Error: The CSV file 'purity_lab_result.csv' is missing one or more required columns ('column', '% of napth', '% of napthalene oil'). Please check the column names.")
                 else:
                     doc.add_paragraph("Note: Lab results data ('purity_lab_result.csv') was not available. Skipping purity analysis.")
 
@@ -260,4 +284,3 @@ if __name__ == '__main__':
         create_word_report(full_df, lab_results_df, output_filename)
     else:
         print("No data found in the specified time range. Please check your table name, date range and database connection.")
-
