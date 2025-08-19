@@ -1,12 +1,12 @@
 @echo off
 REM --- SETTINGS ---
 SET SCRIPT_NAME=advanced_complete_system_analysis_01.py
-SET VENV_PATH=C:\path\to\your\venv
+SET VENV_PATH=H:\SCADA_DATA_ANALYSIS\GENERATING_DATA\venv
 REM ----------------
 
 ECHO.
 ECHO =======================================================
-ECHO    Starting Advanced Distillation Analysis System
+ECHO     Starting Advanced Distillation Analysis System
 ECHO =======================================================
 ECHO.
 
@@ -28,8 +28,8 @@ REM --- Step 2: Check & Install Python Libraries ---
 ECHO.
 ECHO Checking for required Python libraries...
 
-REM Define required packages
-SET "PACKAGES=psycopg2-binary pandas matplotlib python-docx openpyxl"
+REM Define required packages, including the ones that were missing
+SET "PACKAGES=psycopg2-binary pandas matplotlib python-docx openpyxl seaborn scikit-learn statsmodels"
 
 REM Check each package individually
 FOR %%P IN (%PACKAGES%) DO (
