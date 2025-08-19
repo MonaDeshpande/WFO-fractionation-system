@@ -65,6 +65,7 @@ def create_word_report(df, lab_results_df, filename):
     doc.add_paragraph('1.  **Reboiler Temperature in C-03:** The temperature in the reboiler of C-03 is the single most important factor. It must be kept stable between 325-340°C to ensure all the liquid naphthalene is vaporized and sent up the column for recovery.')
     doc.add_paragraph('2.  **Reflux Ratio:** This is the ratio of liquid returned to the top of the column to the liquid product that is drawn off. Maintaining an optimal reflux ratio is essential for efficient separation. A low ratio can lead to poor product purity, while a high ratio wastes energy.')
     doc.add_paragraph('3.  **Feed Quality:** Column C-00 is a dehydration column. Removing moisture at this stage prevents water from interfering with the main separation process and helps avoid operational issues downstream.')
+    doc.add_page_break()
 
     # --- Reboiler Thermic Fluid Temperature Analysis ---
     doc.add_heading('Reboiler Temperature Assessment', level=2)
@@ -109,7 +110,9 @@ def create_word_report(df, lab_results_df, filename):
                 top_product = df[top_flow_tag].mean()
                 bottom_product = df[bottom_flow_tag].mean()
                 total_out = top_product + bottom_product
+                data_points = len(df.index)
 
+                doc.add_paragraph(f'**Data Points Considered:** {data_points:,} total points over the specified time range.')
                 doc.add_paragraph(f'**Average Feed Rate:** {total_feed:.2f} m³/hr')
                 doc.add_paragraph(f'**Average Water Removal Rate:** {top_product:.2f} m³/hr')
                 doc.add_paragraph(f'**Average Dehydrated Product Rate:** {bottom_product:.2f} m³/hr')
@@ -129,6 +132,7 @@ def create_word_report(df, lab_results_df, filename):
                 df['reflux_ratio'] = df.apply(lambda row: row[reflux_flow] / row[top_product_flow] if row[top_product_flow] != 0 else 0, axis=1)
 
                 doc.add_heading('Key Process Metrics', level=2)
+                doc.add_paragraph(f"**Data Points Considered:** {len(df.index):,} total points.")
                 doc.add_paragraph(f"**Average Reflux Ratio:** {df['reflux_ratio'].mean():.2f}")
                 doc.add_paragraph("The reflux ratio is a measure of how much condensed liquid is sent back into the column to improve separation. A higher ratio generally means better purity but also higher energy consumption.")
 
@@ -147,28 +151,84 @@ def create_word_report(df, lab_results_df, filename):
                             break # Found a suitable column, stop searching
 
                     if purity_col:
+                        # Ensure a date column exists for plotting
+                        if 'Date' in lab_results_df.columns:
+                            lab_results_df['datetime'] = pd.to_datetime(lab_results_df['Date'])
+                        else:
+                            doc.add_paragraph("Warning: 'Date' column not found in lab results. Cannot plot purity over time.")
+                            # Fallback to the previous method if plotting is not possible
+                            for sample_info in details['lab_samples']:
+                                sample_name = sample_info['sample']
+                                product_name = sample_info['product']
+                                target_percent = sample_info['target']
+
+                                purity_results = lab_results_df[lab_results_df['column'] == sample_name]
+                                
+                                data_points = len(purity_results.index)
+                                doc.add_paragraph(f"**Lab Data Points Considered:** {data_points} points.")
+
+                                if not purity_results.empty:
+                                    try:
+                                        average_value = purity_results[purity_col].mean()
+                                    except KeyError:
+                                        doc.add_paragraph(f"Error: Could not find the purity column '{purity_col}' for this sample. Analysis skipped.")
+                                        continue
+                                    
+                                    doc.add_paragraph(f"**Average Purity Result for {product_name} in sample {sample_name}:** {average_value:.2f}%")
+                                    if target_percent is not None:
+                                        if average_value > target_percent:
+                                            doc.add_paragraph(f"**🔴 WARNING:** The {product_name} average percentage ({average_value:.2f}%) is higher than the target of <{target_percent}%. This indicates that the column is not achieving the required separation and product quality is out of specification. Corrective action may be needed.")
+                                        else:
+                                            doc.add_paragraph(f"**✅ SUCCESS:** The {product_name} average percentage ({average_value:.2f}%) is within the target of <{target_percent}%, indicating successful separation.")
+                                    else:
+                                        doc.add_paragraph('**Expert Observation:** For the final naphthalene product, this percentage should be as high as possible. The current average value indicates a high degree of recovery.')
+                                else:
+                                    doc.add_paragraph(f"Lab results for sample '{sample_name}' were not found. Purity could not be assessed.")
+                            continue # Skip to the next column in COLUMN_ANALYSIS
+
                         for sample_info in details['lab_samples']:
                             sample_name = sample_info['sample']
                             product_name = sample_info['product']
                             target_percent = sample_info['target']
+                            purity_results = lab_results_df[lab_results_df['column'] == sample_name].copy()
+                            data_points = len(purity_results.index)
+                            
+                            doc.add_paragraph(f"**Lab Data Points Considered:** {data_points} points.")
 
-                            purity_result = lab_results_df[lab_results_df['column'] == sample_name]
-
-                            if not purity_result.empty:
+                            if not purity_results.empty:
                                 try:
-                                    value = purity_result[purity_col].iloc[0]
+                                    # Calculate statistical values
+                                    mean_value = purity_results[purity_col].mean()
+                                    median_value = purity_results[purity_col].median()
+                                    mode_series = purity_results[purity_col].mode()
+                                    mode_value = mode_series[0] if not mode_series.empty else 'N/A'
+
+                                    # Plotting Purity Trend
+                                    plt.figure(figsize=(10, 6))
+                                    plt.plot(purity_results['datetime'], purity_results[purity_col], marker='o', linestyle='-', label=f'{product_name} Purity')
+                                    plt.axhline(mean_value, color='r', linestyle='--', label=f'Mean: {mean_value:.2f}%')
+                                    plt.axhline(median_value, color='g', linestyle='-.', label=f'Median: {median_value:.2f}%')
+                                    if mode_value != 'N/A':
+                                        plt.axhline(mode_value, color='purple', linestyle=':', label=f'Mode: {mode_value:.2f}%')
+                                    
+                                    if target_percent is not None:
+                                        plt.axhline(target_percent, color='orange', linestyle='-', linewidth=2, label=f'Target: <{target_percent}%')
+
+                                    plt.title(f'Purity Trend for {product_name} ({sample_name})')
+                                    plt.xlabel('Date and Time')
+                                    plt.ylabel(f'{product_name} Purity (%)')
+                                    plt.legend()
+                                    plt.grid(True)
+                                    plt.tight_layout()
+
+                                    purity_plot_filename = f'purity_trend_{sample_name}.png'
+                                    plt.savefig(purity_plot_filename)
+                                    doc.add_picture(purity_plot_filename, width=Inches(6))
+                                    doc.add_paragraph(f"The chart above shows the purity trend for the {product_name} product over time. The mean, median, and mode values are marked to indicate the central tendency of the data. The target value is also shown for easy comparison.")
+                                    os.remove(purity_plot_filename) # Clean up the file
                                 except KeyError:
                                     doc.add_paragraph(f"Error: Could not find the purity column '{purity_col}' for this sample. Analysis skipped.")
                                     continue
-
-                                doc.add_paragraph(f"**Purity Result for {product_name} in sample {sample_name}:** {value:.2f}%")
-                                if target_percent is not None:
-                                    if value > target_percent:
-                                        doc.add_paragraph(f"**🔴 WARNING:** The {product_name} percentage ({value:.2f}%) is higher than the target of <{target_percent}%. This indicates that the column is not achieving the required separation and product quality is out of specification. Corrective action may be needed.")
-                                    else:
-                                        doc.add_paragraph(f"**✅ SUCCESS:** The {product_name} percentage ({value:.2f}%) is within the target of <{target_percent}%, indicating successful separation.")
-                                else:
-                                    doc.add_paragraph('**Expert Observation:** For the final naphthalene product, this percentage should be as high as possible. The current value indicates a high degree of recovery.')
                             else:
                                 doc.add_paragraph(f"Lab results for sample '{sample_name}' were not found. Purity could not be assessed.")
                     else:
@@ -181,42 +241,57 @@ def create_word_report(df, lab_results_df, filename):
                 doc.add_heading('Trend Analysis of Key Variables', level=2)
                 doc.add_paragraph("The following charts visualize the stability of key operating parameters over time. Stable operation is critical for consistent product quality.")
 
-                fig, axes = plt.subplots(nrows=3, ncols=1, figsize=(10, 15))
-
+                # Plot 1: Feed Temperature
                 if feed_temp_col in df.columns:
-                    axes[0].plot(df['datetime'], df[feed_temp_col])
-                    axes[0].set_title(f'Feed Temperature ({feed_temp_col}) vs. Time')
-                    axes[0].set_xlabel('Time')
-                    axes[0].set_ylabel('Temperature (°C)')
+                    plt.figure(figsize=(10, 6))
+                    plt.plot(df['datetime'], df[feed_temp_col])
+                    plt.title(f'Feed Temperature ({feed_temp_col}) vs. Time')
+                    plt.xlabel('Time')
+                    plt.ylabel('Temperature (°C)')
+                    plt.grid(True)
+                    plt.tight_layout()
+                    plt_filename = f'plot_{column_name}_feed_temp.png'
+                    plt.savefig(plt_filename)
+                    doc.add_picture(plt_filename, width=Inches(6))
+                    os.remove(plt_filename) # Clean up the file
                 else:
-                    axes[0].set_title(f'Feed Temperature ({feed_temp_col}) Data Not Found')
-
+                    doc.add_paragraph(f"Feed Temperature ({feed_temp_col}) Data Not Found")
+                
+                # Plot 2: Reflux Ratio
                 if 'reflux_ratio' in df.columns:
-                    axes[1].plot(df['datetime'], df['reflux_ratio'])
-                    axes[1].set_title('Reflux Ratio vs. Time')
-                    axes[1].set_xlabel('Time')
-                    axes[1].set_ylabel('Reflux Ratio')
+                    plt.figure(figsize=(10, 6))
+                    plt.plot(df['datetime'], df['reflux_ratio'])
+                    plt.title('Reflux Ratio vs. Time')
+                    plt.xlabel('Time')
+                    plt.ylabel('Reflux Ratio')
+                    plt.grid(True)
+                    plt.tight_layout()
+                    plt_filename = f'plot_{column_name}_reflux_ratio.png'
+                    plt.savefig(plt_filename)
+                    doc.add_picture(plt_filename, width=Inches(6))
+                    os.remove(plt_filename) # Clean up the file
                 else:
-                    axes[1].set_title('Reflux Ratio Data Not Found')
+                    doc.add_paragraph('Reflux Ratio Data Not Found')
 
+                # Plot 3: Temperature Profile
                 if temp_profile_cols:
+                    plt.figure(figsize=(10, 6))
                     for col in temp_profile_cols:
-                        axes[2].plot(df['datetime'], df[col], label=col)
-                    axes[2].set_title('Packed Column Temperature Profile vs. Time')
-                    axes[2].set_xlabel('Time')
-                    axes[2].set_ylabel('Temperature (°C)')
-                    axes[2].legend()
+                        plt.plot(df['datetime'], df[col], label=col)
+                    plt.title('Packed Column Temperature Profile vs. Time')
+                    plt.xlabel('Time')
+                    plt.ylabel('Temperature (°C)')
+                    plt.legend()
+                    plt.grid(True)
+                    plt.tight_layout()
                     doc.add_paragraph("The temperature profile chart is particularly important for packed columns. It shows the temperature at different points along the column's height. A smooth temperature gradient indicates stable operation, while sudden jumps or inconsistencies can signal problems like channeling or fouling of the packing material.")
+                    plt_filename = f'plot_{column_name}_temp_profile.png'
+                    plt.savefig(plt_filename)
+                    doc.add_picture(plt_filename, width=Inches(6))
+                    os.remove(plt_filename) # Clean up the file
                 else:
-                    axes[2].set_title('Temperature Profile Data Not Found')
                     doc.add_paragraph("Temperature profile data was not available. This is a crucial metric for packed column performance and should be monitored.")
 
-
-                plt.tight_layout()
-                plt_filename = f'plot_{column_name}_process.png'
-                plt.savefig(plt_filename)
-                doc.add_picture(plt_filename, width=Inches(6))
-                
                 doc.add_page_break()
             else:
                 doc.add_paragraph(f"**Note:** Missing reflux or top product flow columns for {column_name}. Skipping detailed process metrics and plotting.")
