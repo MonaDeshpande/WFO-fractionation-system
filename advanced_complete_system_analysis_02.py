@@ -701,8 +701,8 @@ def create_word_report(df, lab_results_df, filename, start_time, end_time):
             rr_mean = float(rr.mean(skipna=True))
 
             doc.add_paragraph(f"**Average Reflux Ratio**: {rr_mean:.3f}")
-            doc.add.paragraph("Expert Opinion: The reflux ratio is a key control variable that determines separation efficiency. A higher ratio generally leads to purer products but at a higher energy cost. Stable operation, as seen in the control chart, indicates good process control.")
-
+            doc.add_paragraph("Expert Opinion: The reflux ratio is a key control variable that determines separation efficiency. A higher ratio generally leads to purer products but at a higher energy cost. Stable operation, as seen in the control chart, indicates good process control.")
+            
             tags_for_anomaly = [t for t in [reflux_tag, top_flow_tag] if t in df.columns]
             anomalies_idx = detect_anomalies_kmeans(df, tags_for_anomaly)
 
