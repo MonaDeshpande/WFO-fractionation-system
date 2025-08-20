@@ -125,6 +125,26 @@ COLUMN_ANALYSIS = {
     }
 }
 
+# Add specific thresholds for each instrument based on your input
+VALID_RANGES = {
+    'TI-01': {'min': 0, 'max': 400},
+    'TI-02': {'min': 150, 'max': 400},
+    'TI-11': {'min': 150, 'max': 400},
+    'TI-30': {'min': 150, 'max': 400},
+    'FT-08': {'min': 0, 'max': 5500},
+    'FT-02': {'min': 0, 'max': 3500},
+    'FT-09': {'min': 0, 'max': 5500},
+    'FT-10': {'min': 0, 'max': 4500},
+    'FT-04': {'min': 0, 'max': 4500},
+    'FI-01': {'min': 0, 'max': 5000},
+    'FI-61': {'min': 0, 'max': 1000},
+    'FI-62': {'min': 0, 'max': 4000},
+    'FI-C02-FEED': {'min': 0, 'max': 5000},
+    'FI-TF-03': {'min': 0, 'max': 100},
+    'TI-TF-03-IN': {'min': 150, 'max': 400},
+    'TI-TF-03-OUT': {'min': 150, 'max': 400},
+}
+
 # --------------- UTILS --------------------------------------------------------
 
 def get_data_from_db(start_time_str, end_time_str, table_name):
@@ -363,6 +383,65 @@ def time_series_forecast(df, tag, periods=24):
 
     return forecast_df
 
+# --------------- NEW DATA CLEANING FUNCTION -----------------------------------
+
+def smart_outlier_removal(df, tag):
+    """
+    Removes outliers from a single series based on instrument type and valid ranges.
+    Returns the cleaned series and a list of outlier timestamps.
+    """
+    if tag not in df.columns:
+        return pd.Series(), pd.DataFrame()
+
+    s = pd.to_numeric(df[tag], errors='coerce').copy()
+    initial_shape = s.shape[0]
+
+    # --- Step 1: Filter based on physical/instrument ranges
+    valid_range = VALID_RANGES.get(tag, {'min': -np.inf, 'max': np.inf})
+    outliers_df = s[(s < valid_range['min']) | (s > valid_range['max'])].to_frame(name='Value')
+    s = s[(s >= valid_range['min']) & (s <= valid_range['max'])]
+
+    # --- Step 2: Apply statistical outlier detection based on instrument type
+    is_flow_meter = tag.startswith(('FT-', 'FI-'))
+    
+    if is_flow_meter:
+        # For flow meters, separate zero-flow from active-flow data
+        active_flow_s = s[s > 0.1] # Use a small tolerance for zero
+        if not active_flow_s.empty:
+            Q1 = active_flow_s.quantile(0.25)
+            Q3 = active_flow_s.quantile(0.75)
+            IQR = Q3 - Q1
+            lower_bound = Q1 - 1.5 * IQR
+            upper_bound = Q3 + 1.5 * IQR
+            
+            # Find statistical outliers ONLY in the active flow data
+            iqr_outliers = active_flow_s[(active_flow_s < lower_bound) | (active_flow_s > upper_bound)].to_frame(name='Value')
+            outliers_df = pd.concat([outliers_df, iqr_outliers]).drop_duplicates()
+        
+        # The clean series is all original data except for the identified outliers
+        s_clean = s.drop(outliers_df.index)
+
+    else:
+        # For temperatures and pressures, assume a more normal distribution
+        if not s.empty:
+            Q1 = s.quantile(0.25)
+            Q3 = s.quantile(0.75)
+            IQR = Q3 - Q1
+            lower_bound = Q1 - 1.5 * IQR
+            upper_bound = Q3 + 1.5 * IQR
+            
+            iqr_outliers = s[(s < lower_bound) | (s > upper_bound)].to_frame(name='Value')
+            outliers_df = pd.concat([outliers_df, iqr_outliers]).drop_duplicates()
+        
+        s_clean = s.drop(outliers_df.index)
+        
+    num_outliers = initial_shape - s_clean.shape[0]
+    outlier_percentage = (num_outliers / initial_shape) * 100 if initial_shape > 0 else 0
+    
+    log_and_print(f"Removed {num_outliers} outliers ({outlier_percentage:.2f}%) from {tag}.")
+    
+    return s_clean, outliers_df.dropna().sort_index()
+
 # --------------- PLOTS --------------------------------------------------------
 
 def save_control_chart(df, series_name, out_png, title=None, units="", anomalies=None):
@@ -444,34 +523,7 @@ def save_packing_heatmap(df, packing_tags, out_png, title="Packing Temperature H
     plt.close(fig)
     return True
 
-# --------------- NEW ANALYSIS FUNCTIONS ---------------------------------------
-
-def clean_data_for_plot(series, upper_threshold=400, lower_threshold=-50, iqr_factor=1.5):
-    """
-    Cleans a pandas series by removing outliers and values outside a reasonable range.
-    Returns the cleaned series and the outliers dataframe.
-    """
-    s = pd.to_numeric(series, errors='coerce').copy()
-    initial_shape = s.shape[0]
-
-    # Simple thresholding
-    outliers_df = s[(s > upper_threshold) | (s < lower_threshold)].to_frame(name='Value')
-    s = s[(s <= upper_threshold) & (s >= lower_threshold)]
-
-    # IQR method for more subtle outliers
-    Q1 = s.quantile(0.25)
-    Q3 = s.quantile(0.75)
-    IQR = Q3 - Q1
-    lower_bound = Q1 - iqr_factor * IQR
-    upper_bound = Q3 + iqr_factor * IQR
-
-    iqr_outliers = s[(s < lower_bound) | (s > upper_bound)].to_frame(name='Value')
-    outliers_df = pd.concat([outliers_df, iqr_outliers]).drop_duplicates()
-    s_clean = s[(s >= lower_bound) & (s <= upper_bound)]
-
-    log_and_print(f"Removed {initial_shape - s_clean.shape[0]} outliers from {series.name}.")
-
-    return s_clean, outliers_df.dropna()
+# --------------- ADVANCED ANALYSIS FUNCTIONS ----------------------------------
 
 def analyze_c03_performance(df, lab_df, purity_tag='C-03-T'):
     """
@@ -629,31 +681,67 @@ def create_word_report(df, lab_results_df, filename, start_time, end_time):
     kpi_rows = []
 
     # ---------- Outlier Analysis Section ----------
-    doc.add_heading('2. Data Quality & Anomaly Detection', level=1)
-    doc.add_paragraph("This section leverages **Machine Learning (K-Means Clustering)** to automatically identify and handle data outliers caused by sensor malfunctions or process upsets. These points are removed from the main analysis to ensure accuracy but are reported here for your review.")
+    doc.add_heading('2. Data Quality & Outlier Analysis', level=1)
+    doc.add_paragraph("This section leverages a robust, context-aware outlier detection method to identify data points that deviate significantly from expected operational ranges. The table below lists these outliers by instrument, with special emphasis on instruments where a high percentage of data points were flagged. A high percentage (over 4%) may indicate a sensor issue or that the process was in a non-standard operational state (e.g., shutdown, startup).")
+    
+    outlier_summary = {}
     outlier_tables = {}
-    for col_name, details in COLUMN_ANALYSIS.items():
-        for tag_type, tags in details['tags'].items():
-            if isinstance(tags, str) and tags in df.columns:
-                cleaned_series, outliers_df = clean_data_for_plot(df[tags])
-                if not outliers_df.empty:
-                    outlier_tables[tags] = outliers_df
+    
+    all_tags = set()
+    for col_details in COLUMN_ANALYSIS.values():
+        for tag_type, tags in col_details['tags'].items():
+            if isinstance(tags, str):
+                all_tags.add(tags)
+            elif isinstance(tags, list):
+                all_tags.update(tags)
+    
+    for tag in all_tags:
+        if tag in df.columns:
+            cleaned_series, outliers_df = smart_outlier_removal(df, tag)
+            total_points = df.shape[0]
+            num_outliers = outliers_df.shape[0]
+            outlier_pct = (num_outliers / total_points) * 100 if total_points > 0 else 0
+            
+            outlier_summary[tag] = {
+                'count': num_outliers,
+                'percentage': outlier_pct
+            }
+            if not outliers_df.empty:
+                outlier_tables[tag] = outliers_df
 
-    if outlier_tables:
-        doc.add_paragraph("The following values were identified as outliers and were excluded from the plots to improve visualization clarity.")
-        for tag, outliers_df in outlier_tables.items():
+    doc.add_paragraph("Outlier Summary:")
+    table = doc.add_table(rows=1, cols=3)
+    hdr_cells = table.rows[0].cells
+    hdr_cells[0].text = 'Instrument'
+    hdr_cells[1].text = 'Outlier Count'
+    hdr_cells[2].text = 'Outlier Percentage'
+    
+    for tag, summary in sorted(outlier_summary.items()):
+        row_cells = table.add_row().cells
+        cell_text = f"**{tag}**" if summary['percentage'] > 4 else tag
+        row_cells[0].text = cell_text
+        row_cells[1].text = str(summary['count'])
+        row_cells[2].text = f"{summary['percentage']:.2f}%"
+        
+    doc.add_paragraph("\n")
+    doc.add_paragraph("Details on outliers (up to 4%):")
+    
+    for tag, outliers_df in outlier_tables.items():
+        if outlier_summary[tag]['percentage'] <= 4:
             doc.add_paragraph(f"Outliers for **{tag}**:")
             table = doc.add_table(rows=1, cols=2)
             hdr_cells = table.rows[0].cells
             hdr_cells[0].text = 'Timestamp'
             hdr_cells[1].text = 'Value'
+            
             for idx, row in outliers_df.iterrows():
                 row_cells = table.add_row().cells
                 row_cells[0].text = str(df.loc[idx, 'datetime'])
                 row_cells[1].text = f"{row['Value']:.2f}"
-    else:
-        doc.add_paragraph("No significant outliers were detected during this analysis period.")
-
+            doc.add_paragraph("\n")
+    
+    doc.add_paragraph("Instruments with **>4%** outliers should be investigated further in a tool like Power BI to understand if the process was in a non-standard state.")
+    
     doc.add_page_break()
 
     # ---------- C-00 Moisture Removal ----------
@@ -694,15 +782,20 @@ def create_word_report(df, lab_results_df, filename, start_time, end_time):
         reflux_tag = tags.get('reflux_flow')
         top_flow_tag = tags.get('top_flow')
         if reflux_tag in df.columns and top_flow_tag in df.columns:
-            reflux_flow_series = pd.to_numeric(df[reflux_tag], errors='coerce')
-            top_flow_series = pd.to_numeric(df[top_flow_tag], errors='coerce')
+            
+            # Use cleaned data for analysis
+            reflux_flow_series, _ = smart_outlier_removal(df, reflux_tag)
+            top_flow_series, _ = smart_outlier_removal(df, top_flow_tag)
 
-            rr = reflux_flow_series / top_flow_series.replace(0, np.nan)
+            # Ensure same index for division
+            combined_flow = pd.DataFrame({'reflux': reflux_flow_series, 'top': top_flow_series}).dropna()
+            
+            rr = combined_flow['reflux'] / combined_flow['top'].replace(0, np.nan)
             rr_mean = float(rr.mean(skipna=True))
 
             doc.add_paragraph(f"**Average Reflux Ratio**: {rr_mean:.3f}")
             doc.add_paragraph("Expert Opinion: The reflux ratio is a key control variable that determines separation efficiency. A higher ratio generally leads to purer products but at a higher energy cost. Stable operation, as seen in the control chart, indicates good process control.")
-            
+
             tags_for_anomaly = [t for t in [reflux_tag, top_flow_tag] if t in df.columns]
             anomalies_idx = detect_anomalies_kmeans(df, tags_for_anomaly)
 
@@ -710,19 +803,18 @@ def create_word_report(df, lab_results_df, filename, start_time, end_time):
             tmp = df[['datetime']].copy()
             tmp['rr'] = rr
             tmp.rename(columns={'rr':f'{col_name}_reflux_ratio'}, inplace=True)
-            cleaned_tmp, _ = clean_data_for_plot(tmp[f'{col_name}_reflux_ratio'])
-            if save_control_chart(tmp.loc[cleaned_tmp.index], f'{col_name}_reflux_ratio', out_png, title=f"{col_name} Reflux Ratio Control Chart", units="(dimensionless)", anomalies=anomalies_idx):
+            if save_control_chart(tmp.loc[rr.index], f'{col_name}_reflux_ratio', out_png, title=f"{col_name} Reflux Ratio Control Chart", units="(dimensionless)", anomalies=anomalies_idx):
                 doc.add_picture(out_png, width=Inches(6))
-                doc.add.paragraph("Figure 1: Statistical Process Control (SPC) chart for the reflux ratio. The dashed blue line represents the process average, and the red dotted lines show the 3-sigma control limits. Data points outside these limits signal a statistically significant deviation from normal operation.")
+                doc.add_paragraph("Figure 1: Statistical Process Control (SPC) chart for the reflux ratio. The dashed blue line represents the process average, and the red dotted lines show the 3-sigma control limits. Data points outside these limits signal a statistically significant deviation from normal operation.")
         else:
-            doc.add.paragraph("Reflux ratio analysis: Required tags for reflux and top product flow were not found. Skipping analysis.")
+            doc.add_paragraph("Reflux ratio analysis: Required tags for reflux and top product flow were not found. Skipping analysis.")
 
         # Packing temp gradient & heatmap
         packing_temps = tags.get('packing_temps')
         if packing_temps and have_cols(df, packing_temps):
             df_cleaned = df.copy()
             for t in packing_temps:
-                df_cleaned[t], _ = clean_data_for_plot(df[t], upper_threshold=400) # Apply temperature filter
+                df_cleaned[t], _ = smart_outlier_removal(df, t)
 
             grad_mean, grad_std = packing_temp_gradient_score(df_cleaned, packing_temps)
             doc.add_paragraph(f"**Packing Temperature Gradient**: Mean = {grad_mean:.2f}°C/section, Std Dev = {grad_std:.2f}°C")
@@ -731,16 +823,16 @@ def create_word_report(df, lab_results_df, filename, start_time, end_time):
             out_png = os.path.join(OUT_DIR, f"{col_name}_packing_heatmap.png")
             if save_packing_heatmap(df_cleaned, packing_temps, out_png, title=f"{col_name} Packing Temperature Heatmap"):
                 doc.add_picture(out_png, width=Inches(6))
-                doc.add.paragraph("Figure 2: Heatmap of packing temperatures over time. A uniform color band from top to bottom indicates a consistent temperature profile. Hot or cold spots could signal issues like liquid channeling or a blocked section.")
+                doc.add_paragraph("Figure 2: Heatmap of packing temperatures over time. A uniform color band from top to bottom indicates a consistent temperature profile. Hot or cold spots could signal issues like liquid channeling or a blocked section.")
         else:
-            doc.add.paragraph("Packing temperature analysis: Required tags for packing temperatures were not found. Skipping analysis.")
+            doc.add_paragraph("Packing temperature analysis: Required tags for packing temperatures were not found. Skipping analysis.")
 
         # Differential pressure (DP) and flooding proxy
         dp_tag = tags.get('dp')
         if dp_tag and dp_tag in df.columns:
             flooding_status, dp_mean, dp_std = flooding_proxy_text(df, dp_tag)
-            doc.add_paragraph(f"**Delta P & Flooding Status**: {flooding_status}")
-            doc.add_paragraph(f"**Average Delta P**: {dp_mean:.2f}, **Std Dev**: {dp_std:.2f}")
+            doc.add.paragraph(f"**Delta P & Flooding Status**: {flooding_status}")
+            doc.add.paragraph(f"**Average Delta P**: {dp_mean:.2f}, **Std Dev**: {dp_std:.2f}")
             doc.add.paragraph("Expert Opinion: The differential pressure (ΔP) across the packing is a critical indicator of column health. A sudden or sustained rise in ΔP suggests an increased pressure drop, often a key indicator of vapor-liquid buildup, which can lead to column flooding and a complete loss of separation.")
             kpi_rows.append([col_name, 'Avg_DP', float(dp_mean)])
         else:
@@ -769,11 +861,11 @@ def create_word_report(df, lab_results_df, filename, start_time, end_time):
                 doc.add.paragraph("Expert Opinion: This is the primary plant KPI. It measures the amount of naphthalene recovered at the top of C-03 relative to the amount in the initial feed to C-00. A high percentage indicates excellent overall plant performance.")
 
                 purity_top_status, _ = purity_risk_bands(pd.Series([purity_c03_top]), 90.0, limit_type='min')
-                doc.add_paragraph(f"**Top Product (Naphthalene Oil) Purity**: {purity_c03_top:.2f}%")
+                doc.add.paragraph(f"**Top Product (Naphthalene Oil) Purity**: {purity_c03_top:.2f}%")
                 doc.add.paragraph(f"**Top Purity Compliance**: {purity_top_status} (Target > 90%)")
 
                 purity_bottom_status, _ = purity_risk_bands(pd.Series([purity_c03_bottom]), 2.0, limit_type='max')
-                doc.add_paragraph(f"**Bottom Product (Wash Oil) Purity**: {purity_c03_bottom:.2f}%")
+                doc.add.paragraph(f"**Bottom Product (Wash Oil) Purity**: {purity_c03_bottom:.2f}%")
                 doc.add.paragraph(f"**Bottom Purity Compliance**: {purity_bottom_status} (Target < 2%)")
                 doc.add.paragraph("Expert Opinion: This column performs the final purification step. The high concentration of naphthalene in the top product is a good sign. The low concentration in the bottom wash oil is also critical, as it indicates minimal product loss.")
 
@@ -781,7 +873,7 @@ def create_word_report(df, lab_results_df, filename, start_time, end_time):
                 doc.add.paragraph("This section breaks down the impurity profile of the Naphthalene Oil (NO) top product, which is crucial for meeting final product specifications.")
                 # Get impurity values from lab sheet
                 c03_t_data = lab_results_df[lab_results_df['Sample Detail'] == 'C-03-T'].iloc[0]
-                doc.add_paragraph(f"**Thianaphthene (%):** {c03_t_data.get('Thianaphth. %', 'N/A')}")
+                doc.add.paragraph(f"**Thianaphthene (%):** {c03_t_data.get('Thianaphth. %', 'N/A')}")
                 doc.add.paragraph(f"**Quinoline (ppm):** {c03_t_data.get('Quinolin', 'N/A')}")
                 doc.add.paragraph(f"**Unknown Impurity (%):** {c03_t_data.get('Unknown Impurity%', 'N/A')}")
         else:
@@ -932,7 +1024,7 @@ def get_baseline_df(start_date, end_date, table_name, baseline_period_days):
 if __name__ == "__main__":
     table_to_analyze = 'data_cleaning_with_report'
     start_time_str = '2025-08-08 00:00:40'
-    end_time_str = '2025-08-20 12:40:00'
+    end_time_str = '2025-08-14 23:59:59'
 
     log_and_print(f"Starting analysis for table '{table_to_analyze}' from {start_time_str} to {end_time_str}...")
 
