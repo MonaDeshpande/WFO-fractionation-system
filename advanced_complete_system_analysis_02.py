@@ -784,7 +784,7 @@ def create_word_report(df, lab_results_df, filename, start_time, end_time, kpi_r
                 doc.add.paragraph(f"**Quinoline (ppm):** {c03_t_data.get('Quinolin', 'N/A')}")
                 doc.add.paragraph(f"**Unknown Impurity (%):** {c03_t_data.get('Unknown Impurity%', 'N/A')}")
         else:
-            doc.add.paragraph("Lab results data not available. Skipping purity and recovery analysis.")
+            doc.add_paragraph("Lab results data not available. Skipping purity and recovery analysis.")
 
     doc.add_page_break()
 
