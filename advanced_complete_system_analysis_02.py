@@ -752,37 +752,37 @@ def create_word_report(df, lab_results_df, filename, start_time, end_time, kpi_r
             if col_name == 'C-01':
                 purity_status, _ = purity_risk_bands(pd.Series([purity_c01_bottom]), 2.0)
                 doc.add_paragraph(f"**Anthracene Oil Purity**: {purity_c01_bottom:.2f}% Naphthalene")
-                doc.add.paragraph(f"**Purity Compliance**: {purity_status} (Target < 2%)")
-                doc.add.paragraph("Expert Opinion: This column aims to remove naphthalene from the anthracene oil bottom product. A value above the 2% target indicates that a significant amount of light components are being carried over, which could impact the final product quality of the entire plant.")
+                doc.add_paragraph(f"**Purity Compliance**: {purity_status} (Target < 2%)")
+                doc.add_paragraph("Expert Opinion: This column aims to remove naphthalene from the anthracene oil bottom product. A value above the 2% target indicates that a significant amount of light components are being carried over, which could impact the final product quality of the entire plant.")
 
             elif col_name == 'C-02':
                 purity_status, _ = purity_risk_bands(pd.Series([purity_c02_top]), 15.0, limit_type='max')
                 doc.add_paragraph(f"**Light Oil Purity**: {purity_c02_top:.2f}% Naphthalene")
-                doc.add.paragraph(f"**Purity Compliance**: {purity_status} (Target < 15%)")
-                doc.add.paragraph("Expert Opinion: The objective here is to ensure the top product is light oil with a minimal amount of naphthalene. A value above the 15% target suggests that the column is not effectively separating the components, leading to product contamination.")
+                doc.add_paragraph(f"**Purity Compliance**: {purity_status} (Target < 15%)")
+                doc.add_paragraph("Expert Opinion: The objective here is to ensure the top product is light oil with a minimal amount of naphthalene. A value above the 15% target suggests that the column is not effectively separating the components, leading to product contamination.")
 
             elif col_name == 'C-03':
                 recovery, _, _ = compute_recovery_efficiency(df, lab_results_df,
                                                             COLUMN_ANALYSIS['C-00']['tags']['feed'],
                                                             tags['top_flow'])
                 doc.add_paragraph(f"**Naphthalene Recovery Efficiency**: {recovery:.2f}%")
-                doc.add.paragraph("Expert Opinion: This is the primary plant KPI. It measures the amount of naphthalene recovered at the top of C-03 relative to the amount in the initial feed to C-00. A high percentage indicates excellent overall plant performance.")
+                doc.add_paragraph("Expert Opinion: This is the primary plant KPI. It measures the amount of naphthalene recovered at the top of C-03 relative to the amount in the initial feed to C-00. A high percentage indicates excellent overall plant performance.")
 
                 purity_top_status, _ = purity_risk_bands(pd.Series([purity_c03_top]), 90.0, limit_type='min')
-                doc.add.paragraph(f"**Top Product (Naphthalene Oil) Purity**: {purity_c03_top:.2f}%")
-                doc.add.paragraph(f"**Top Purity Compliance**: {purity_top_status} (Target > 90%)")
+                doc.add_paragraph(f"**Top Product (Naphthalene Oil) Purity**: {purity_c03_top:.2f}%")
+                doc.add_paragraph(f"**Top Purity Compliance**: {purity_top_status} (Target > 90%)")
 
                 purity_bottom_status, _ = purity_risk_bands(pd.Series([purity_c03_bottom]), 2.0, limit_type='max')
-                doc.add.paragraph(f"**Bottom Product (Wash Oil) Purity**: {purity_c03_bottom:.2f}%")
-                doc.add.paragraph(f"**Bottom Purity Compliance**: {purity_bottom_status} (Target < 2%)")
-                doc.add.paragraph("Expert Opinion: This column performs the final purification step. The high concentration of naphthalene in the top product is a good sign. The low concentration in the bottom wash oil is also critical, as it indicates minimal product loss.")
+                doc.add_paragraph(f"**Bottom Product (Wash Oil) Purity**: {purity_c03_bottom:.2f}%")
+                doc.add_paragraph(f"**Bottom Purity Compliance**: {purity_bottom_status} (Target < 2%)")
+                doc.add_paragraph("Expert Opinion: This column performs the final purification step. The high concentration of naphthalene in the top product is a good sign. The low concentration in the bottom wash oil is also critical, as it indicates minimal product loss.")
 
                 doc.add_heading("6. C-03 Top Product Impurities", level=2)
-                doc.add.paragraph("This section breaks down the impurity profile of the Naphthalene Oil (NO) top product, which is crucial for meeting final product specifications.")
+                doc.add_paragraph("This section breaks down the impurity profile of the Naphthalene Oil (NO) top product, which is crucial for meeting final product specifications.")
                 c03_t_data = lab_results_df[lab_results_df['Sample Detail'] == 'C-03-T'].iloc[0]
-                doc.add.paragraph(f"**Thianaphthene (%):** {c03_t_data.get('Thianaphth. %', 'N/A')}")
-                doc.add.paragraph(f"**Quinoline (ppm):** {c03_t_data.get('Quinolin', 'N/A')}")
-                doc.add.paragraph(f"**Unknown Impurity (%):** {c03_t_data.get('Unknown Impurity%', 'N/A')}")
+                doc.add_paragraph(f"**Thianaphthene (%):** {c03_t_data.get('Thianaphth. %', 'N/A')}")
+                doc.add_paragraph(f"**Quinoline (ppm):** {c03_t_data.get('Quinolin', 'N/A')}")
+                doc.add_paragraph(f"**Unknown Impurity (%):** {c03_t_data.get('Unknown Impurity%', 'N/A')}")
         else:
             doc.add_paragraph("Lab results data not available. Skipping purity and recovery analysis.")
 
@@ -798,14 +798,14 @@ def create_word_report(df, lab_results_df, filename, start_time, end_time, kpi_r
                                              feed_rate_plot_png, "C-02 Feed Rate vs. Column Pressure",
                                              "Feed Rate (kg/h)", "Column Pressure (bar)"):
             doc.add_picture(feed_rate_plot_png, width=Inches(6))
-            doc.add.paragraph("Figure 3: This plot shows the relationship between the feed rate to Column C-02 and the resulting pressure. A sharp increase in pressure at higher feed rates is a strong indicator of an approaching **flooding point**, where the liquid and vapor phases are unable to move counter-currently through the column.")
+            doc.add_paragraph("Figure 3: This plot shows the relationship between the feed rate to Column C-02 and the resulting pressure. A sharp increase in pressure at higher feed rates is a strong indicator of an approaching **flooding point**, where the liquid and vapor phases are unable to move counter-currently through the column.")
         feed_dp_plot_png = os.path.join(OUT_DIR, "C02_Feed_Rate_vs_DP.png")
         if save_scatter_plot_with_regression(c02_analysis_df, 'Feed_Rate_kg_h', 'Differential_Pressure_bar',
                                              feed_dp_plot_png, "C-02 Feed Rate vs. Differential Pressure",
                                              "Feed Rate (kg/h)", "Differential Pressure (bar)"):
             doc.add_picture(feed_dp_plot_png, width=Inches(6))
-            doc.add.paragraph("Figure 4: This plot of feed rate versus differential pressure further confirms the issue. A rapid increase in ΔP is the most reliable early indicator of flooding, as it represents the increased resistance to vapor flow caused by liquid accumulation.")
-        doc.add.paragraph("Expert Opinion: The data confirms the operator's observation. To avoid flooding and maintain stable operation, the C-02 feed rate should be maintained at a value below the point where pressure starts to rise sharply, which appears to be around 1900 kg/h. This is likely the column's design limit for the current operating conditions. Future optimization efforts should focus on improving feed quality or modifying the column's internal components if a higher throughput is required.")
+            doc.add_paragraph("Figure 4: This plot of feed rate versus differential pressure further confirms the issue. A rapid increase in ΔP is the most reliable early indicator of flooding, as it represents the increased resistance to vapor flow caused by liquid accumulation.")
+        doc.add_paragraph("Expert Opinion: The data confirms the operator's observation. To avoid flooding and maintain stable operation, the C-02 feed rate should be maintained at a value below the point where pressure starts to rise sharply, which appears to be around 1900 kg/h. This is likely the column's design limit for the current operating conditions. Future optimization efforts should focus on improving feed quality or modifying the column's internal components if a higher throughput is required.")
     else:
         doc.addparagraph("C-02 feed rate analysis could not be performed due to insufficient data.")
 
@@ -813,12 +813,12 @@ def create_word_report(df, lab_results_df, filename, start_time, end_time, kpi_r
 
     # --------------- Wash Oil Analysis ---------------------------------------
     doc.add_heading('8. Wash Oil & Temperature Correlation', level=1)
-    doc.add.paragraph("This section analyzes the use of different wash oils and their impact on C-03 operation.")
+    doc.add_paragraph("This section analyzes the use of different wash oils and their impact on C-03 operation.")
     wo_270_temp = check_wash_oil_temp_correlation(df, lab_results_df)
     if not pd.isna(wo_270_temp):
-        doc.add.paragraph(f"The analysis confirms that during the use of **WO-270°C**, the average C-03 top feed temperature was **{wo_270_temp:.2f}°C**. This aligns with the operator's practice of reducing the column top feed temperature to a range of 216-225°C when using this specific wash oil, indicating a change in operating conditions to favor the separation characteristics of the lighter wash oil.")
+        doc.add_paragraph(f"The analysis confirms that during the use of **WO-270°C**, the average C-03 top feed temperature was **{wo_270_temp:.2f}°C**. This aligns with the operator's practice of reducing the column top feed temperature to a range of 216-225°C when using this specific wash oil, indicating a change in operating conditions to favor the separation characteristics of the lighter wash oil.")
     else:
-        doc.add.paragraph("Correlation with Wash Oil temperature could not be performed. Either WO-270°C data was not found in the lab sheet or corresponding process data was not available.")
+        doc.add_paragraph("Correlation with Wash Oil temperature could not be performed. Either WO-270°C data was not found in the lab sheet or corresponding process data was not available.")
 
     doc.add_page_break()
 
@@ -829,10 +829,10 @@ def create_word_report(df, lab_results_df, filename, start_time, end_time, kpi_r
     c03_correlations, c03_plot_data = analyze_c03_performance(df, lab_results_df)
 
     if c03_correlations is not None:
-        doc.add.paragraph("This section analyzes how key process parameters in the C-03 column correlate with the final top product purity (Naphthalene). This is achieved using **Linear Regression**, a machine learning technique that identifies and quantifies the linear relationship between two variables.")
+        doc.add_paragraph("This section analyzes how key process parameters in the C-03 column correlate with the final top product purity (Naphthalene). This is achieved using **Linear Regression**, a machine learning technique that identifies and quantifies the linear relationship between two variables.")
 
         # Display Correlation Table
-        doc.add.paragraph("Correlation Matrix with Naphthalene Purity (C-03 Top):")
+        doc.add_paragraph("Correlation Matrix with Naphthalene Purity (C-03 Top):")
         table = doc.add_table(rows=1, cols=2)
         hdr_cells = table.rows[0].cells
         hdr_cells[0].text = 'Parameter'
@@ -842,7 +842,7 @@ def create_word_report(df, lab_results_df, filename, start_time, end_time, kpi_r
             row_cells[0].text = row['Parameter']
             row_cells[1].text = f"{row['Correlation_with_Purity']:.2f}"
 
-        doc.add.paragraph("A value close to +1 indicates a strong positive relationship (e.g., as temperature increases, purity increases), while a value close to -1 indicates a strong negative relationship (e.g., as pressure increases, purity decreases).")
+        doc.add_paragraph("A value close to +1 indicates a strong positive relationship (e.g., as temperature increases, purity increases), while a value close to -1 indicates a strong negative relationship (e.g., as pressure increases, purity decreases).")
 
         # Plot for Reboiler Temp vs Purity
         reboiler_plot_png = os.path.join(OUT_DIR, "C03_Reboiler_Temp_vs_Purity.png")
@@ -850,7 +850,7 @@ def create_word_report(df, lab_results_df, filename, start_time, end_time, kpi_r
                                              reboiler_plot_png, "Reboiler Temperature vs. Top Purity",
                                              "Reboiler Temperature (°C)", "Naphthalene Purity (%)"):
             doc.add_picture(reboiler_plot_png, width=Inches(6))
-            doc.add.paragraph("Figure 5: Scatter plot showing the relationship between C-03 reboiler temperature and top product purity. The red line represents the best-fit regression model, which helps visualize the general trend.")
+            doc.add_paragraph("Figure 5: Scatter plot showing the relationship between C-03 reboiler temperature and top product purity. The red line represents the best-fit regression model, which helps visualize the general trend.")
 
         # Plot for Reflux Ratio vs Purity
         reflux_plot_png = os.path.join(OUT_DIR, "C03_Reflux_Ratio_vs_Purity.png")
@@ -858,7 +858,7 @@ def create_word_report(df, lab_results_df, filename, start_time, end_time, kpi_r
                                              reflux_plot_png, "Reflux Ratio vs. Top Purity",
                                              "Reflux Ratio (L/D)", "Naphthalene Purity (%)"):
             doc.add_picture(reflux_plot_png, width=Inches(6))
-            doc.add.paragraph("Figure 6: Scatter plot showing the relationship between C-03 reflux ratio and top product purity. A positive trend suggests that a higher reflux is associated with better separation.")
+            doc.add_paragraph("Figure 6: Scatter plot showing the relationship between C-03 reflux ratio and top product purity. A positive trend suggests that a higher reflux is associated with better separation.")
 
         # Plot for Differential Pressure vs Purity
         dp_plot_png = os.path.join(OUT_DIR, "C03_DP_vs_Purity.png")
@@ -866,7 +866,7 @@ def create_word_report(df, lab_results_df, filename, start_time, end_time, kpi_r
                                              dp_plot_png, "Differential Pressure vs. Top Purity",
                                              "Differential Pressure (bar)", "Naphthalene Purity (%)"):
             doc.add_picture(dp_plot_png, width=Inches(6))
-            doc.add.paragraph("Figure 7: Scatter plot showing the relationship between C-03 differential pressure and top product purity. A negative trend is expected, as higher pressure drop indicates poor column performance and potential flooding.")
+            doc.add_paragraph("Figure 7: Scatter plot showing the relationship between C-03 differential pressure and top product purity. A negative trend is expected, as higher pressure drop indicates poor column performance and potential flooding.")
 
         # Plot for Column Pressure vs Purity
         pressure_plot_png = os.path.join(OUT_DIR, "C03_Pressure_vs_Purity.png")
@@ -874,44 +874,44 @@ def create_word_report(df, lab_results_df, filename, start_time, end_time, kpi_r
                                              pressure_plot_png, "Column Pressure vs. Top Purity",
                                              "Column Pressure (bar)", "Naphthalene Purity (%)"):
             doc.add_picture(pressure_plot_png, width=Inches(6))
-            doc.add.paragraph("Figure 8: Scatter plot showing the relationship between C-03 column pressure and top product purity. A negative correlation suggests that lower pressure is beneficial for separation.")
+            doc.add_paragraph("Figure 8: Scatter plot showing the relationship between C-03 column pressure and top product purity. A negative correlation suggests that lower pressure is beneficial for separation.")
 
 
         # Optimal Conditions Summary
         doc.add_heading("10. Optimal Conditions Summary", level=1)
-        doc.add.paragraph("Based on the data analysis, the following conditions were associated with the highest naphthalene purity in the C-03 column:")
+        doc.add_paragraph("Based on the data analysis, the following conditions were associated with the highest naphthalene purity in the C-03 column:")
         
         doc.add_paragraph(f"**Reboiler Temperature:** The analysis showed a strong positive correlation, suggesting that higher temperatures (within the 325-340°C range) were beneficial for separation.")
         doc.add_paragraph(f"**Reflux Ratio:** Higher reflux ratios were consistently associated with improved separation, as expected.")
-        doc.add.paragraph(f"**Differential Pressure:** A stable, low differential pressure was observed during periods of high purity. Maintaining a ΔP below a certain threshold is critical to avoid flooding.")
-        doc.add.paragraph(f"**Column Pressure:** The data indicates that lower column pressure was correlated with higher product purity, which is consistent with theoretical expectations for this type of distillation.")
+        doc.add_paragraph(f"**Differential Pressure:** A stable, low differential pressure was observed during periods of high purity. Maintaining a ΔP below a certain threshold is critical to avoid flooding.")
+        doc.add_paragraph(f"**Column Pressure:** The data indicates that lower column pressure was correlated with higher product purity, which is consistent with theoretical expectations for this type of distillation.")
 
     else:
-        doc.add.paragraph("C-03 performance analysis could not be completed due to insufficient or incomplete data.")
+        doc.add_paragraph("C-03 performance analysis could not be completed due to insufficient or incomplete data.")
 
     # Energy Balance Section
     doc.add_heading('11. Understanding Energy Balance', level=1)
-    doc.add.paragraph("A simplified energy proxy KPI was used in this report, based on the **PF66 thermic fluid flow** and temperature drop. A full **energy balance** is crucial for optimizing plant efficiency but requires more detailed data than is available in the current SCADA tags. A true energy balance would involve accounting for all energy inputs and outputs:")
+    doc.add_paragraph("A simplified energy proxy KPI was used in this report, based on the **PF66 thermic fluid flow** and temperature drop. A full **energy balance** is crucial for optimizing plant efficiency but requires more detailed data than is available in the current SCADA tags. A true energy balance would involve accounting for all energy inputs and outputs:")
 
     doc.add_paragraph(f"Energy Input: **Heat supplied by the reboiler**, which is calculated as the mass flow rate of the thermic fluid multiplied by its specific heat capacity ($c_p$) and the temperature difference across the reboiler ($Q = m \cdot c_p \cdot \Delta T$). A standard approximation of {CP_THERMIC_FLUID} kJ/kg·K was used for the specific heat of PF66.")
-    doc.add.paragraph("Energy Output: **Heat removed by the condenser** (vapor flow rate multiplied by latent heat of vaporization), and **sensible heat** carried away by the top and bottom products.")
-    doc.add.paragraph("Heat Losses: Energy lost to the environment through the column walls, which is difficult to measure and often requires an estimated heat transfer coefficient.")
+    doc.add_paragraph("Energy Output: **Heat removed by the condenser** (vapor flow rate multiplied by latent heat of vaporization), and **sensible heat** carried away by the top and bottom products.")
+    doc.add_paragraph("Heat Losses: Energy lost to the environment through the column walls, which is difficult to measure and often requires an estimated heat transfer coefficient.")
 
-    doc.add.paragraph("To perform this, you would need the following additional data points, which are typically found on the plant's P&ID (Piping and Instrumentation Diagram):")
+    doc.add_paragraph("To perform this, you would need the following additional data points, which are typically found on the plant's P&ID (Piping and Instrumentation Diagram):")
 
-    doc.add.paragraph("Flows, temperatures, and specific heats for all streams (feed, top product, bottom product).")
-    doc.add.paragraph("An accurate specific heat capacity for the thermic fluid at operating temperatures.")
+    doc.add_paragraph("Flows, temperatures, and specific heats for all streams (feed, top product, bottom product).")
+    doc.add_paragraph("An accurate specific heat capacity for the thermic fluid at operating temperatures.")
 
     doc.add_page_break()
     
     # Final section explaining the value of the report
     doc.add_heading('12. The Value of This Analysis', level=1)
-    doc.add.paragraph("This report goes beyond the capabilities of standard industrial software like Aspen and SCADA systems by providing **actionable, proactive intelligence** based on a holistic analysis of your plant data.")
-    doc.add.paragraph("While **SCADA** systems are excellent for real-time monitoring and **Aspen** is a powerful design and simulation tool, neither is designed to perform the following tasks automatically and on-demand:")
-    doc.add.paragraph("**Proactive Insights**: By using **Machine Learning (ARIMA)** for time series forecasting, this report predicts future process trends, allowing operators to make adjustments before a problem occurs.")
-    doc.add.paragraph("**Data Quality Assurance**: The **K-Means clustering** algorithm intelligently filters out bad data points, ensuring that all analyses and reports are based on accurate and reliable information.")
-    doc.add.paragraph("**Bridging the Gap**: The report seamlessly integrates real-time SCADA data with offline lab results to provide a single, unified view of plant performance, connecting process conditions to final product quality.")
-    doc.add.paragraph("**Customized Problem Solving**: This script can be easily modified to address specific, ad-hoc issues like the C-02 pressure build-up problem. This flexibility allows for rapid, data-driven troubleshooting without waiting for software updates or complex reconfigurations.")
+    doc.add_paragraph("This report goes beyond the capabilities of standard industrial software like Aspen and SCADA systems by providing **actionable, proactive intelligence** based on a holistic analysis of your plant data.")
+    doc.add_paragraph("While **SCADA** systems are excellent for real-time monitoring and **Aspen** is a powerful design and simulation tool, neither is designed to perform the following tasks automatically and on-demand:")
+    doc.add_paragraph("**Proactive Insights**: By using **Machine Learning (ARIMA)** for time series forecasting, this report predicts future process trends, allowing operators to make adjustments before a problem occurs.")
+    doc.add_paragraph("**Data Quality Assurance**: The **K-Means clustering** algorithm intelligently filters out bad data points, ensuring that all analyses and reports are based on accurate and reliable information.")
+    doc.add_paragraph("**Bridging the Gap**: The report seamlessly integrates real-time SCADA data with offline lab results to provide a single, unified view of plant performance, connecting process conditions to final product quality.")
+    doc.add_paragraph("**Customized Problem Solving**: This script can be easily modified to address specific, ad-hoc issues like the C-02 pressure build-up problem. This flexibility allows for rapid, data-driven troubleshooting without waiting for software updates or complex reconfigurations.")
     
     # Final save
     doc.save(filename)
@@ -938,6 +938,23 @@ if __name__ == "__main__":
     if df.empty:
         log_and_print("No SCADA data to analyze. Exiting script.", 'error')
     else:
+        # Load Lab Results
+        try:
+            lab_results_df = pd.read_csv('WFO Plant GC Report-25-26.csv')
+            
+            # 🌟 NEW: Standardize column names to be case-insensitive and remove whitespace
+            lab_results_df.columns = lab_results_df.columns.str.strip().str.lower()
+            
+            # 🌟 UPDATED: Now rename the standardized lowercase columns to the desired names
+            lab_results_df.rename(columns={'analysis date':'Analysis Date', 'analysis time':'Analysis Time', 'sample detail':'Sample Detail', 'material':'Material'}, inplace=True)
+            
+            if 'Analysis Date' in lab_results_df.columns and 'Analysis Time' in lab_results_df.columns:
+                lab_results_df['datetime'] = pd.to_datetime(lab_results_df['Analysis Date'] + ' ' + lab_results_df['Analysis Time'], dayfirst=True)
+                lab_results_df.sort_values('datetime', ascending=False, inplace=True)
+            log_and_print("Successfully loaded lab results.")
+        except FileNotFoundError:
+            log_and_print("Error: WFO Plant GC Report-25-26.csv not found. Purity analysis will be skipped.", 'error')
+            lab_results_df = pd.DataFrame()
         # Load Lab Results
         try:
             lab_results_df = pd.read_csv('WFO Plant GC Report-25-26.csv')
