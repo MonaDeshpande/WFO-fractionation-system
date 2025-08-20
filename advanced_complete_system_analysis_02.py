@@ -790,7 +790,7 @@ def create_word_report(df, lab_results_df, filename, start_time, end_time, kpi_r
 
     # --------------- C-02 Specific Analysis ---------------------------------------
     doc.add_heading('7. C-02 Feed Rate & Pressure Build-up Analysis', level=1)
-    doc.add.paragraph("This section addresses the operator-reported issue of pressure build-up when the feed rate to Column C-02 exceeds 1900 kg/h.")
+    doc.add_paragraph("This section addresses the operator-reported issue of pressure build-up when the feed rate to Column C-02 exceeds 1900 kg/h.")
     c02_analysis_df = analyze_c02_performance(df)
     if c02_analysis_df is not None:
         feed_rate_plot_png = os.path.join(OUT_DIR, "C02_Feed_Rate_vs_Pressure.png")
@@ -807,7 +807,7 @@ def create_word_report(df, lab_results_df, filename, start_time, end_time, kpi_r
             doc.add.paragraph("Figure 4: This plot of feed rate versus differential pressure further confirms the issue. A rapid increase in ΔP is the most reliable early indicator of flooding, as it represents the increased resistance to vapor flow caused by liquid accumulation.")
         doc.add.paragraph("Expert Opinion: The data confirms the operator's observation. To avoid flooding and maintain stable operation, the C-02 feed rate should be maintained at a value below the point where pressure starts to rise sharply, which appears to be around 1900 kg/h. This is likely the column's design limit for the current operating conditions. Future optimization efforts should focus on improving feed quality or modifying the column's internal components if a higher throughput is required.")
     else:
-        doc.add.paragraph("C-02 feed rate analysis could not be performed due to insufficient data.")
+        doc.addparagraph("C-02 feed rate analysis could not be performed due to insufficient data.")
 
     doc.add_page_break()
 
@@ -941,7 +941,13 @@ if __name__ == "__main__":
         # Load Lab Results
         try:
             lab_results_df = pd.read_csv('WFO Plant GC Report-25-26.csv')
-            lab_results_df.rename(columns={'Analysis Date':'Analysis Date', 'Analysis Time':'Analysis Time', 'Sample Detail':'Sample Detail', 'Material':'Material'}, inplace=True)
+    
+            # 🌟 NEW: Standardize column names to be case-insensitive and remove whitespace
+            lab_results_df.columns = lab_results_df.columns.str.strip().str.lower()
+    
+            # 🌟 UPDATED: Now rename the standardized lowercase columns to the desired names
+            lab_results_df.rename(columns={'analysis date':'Analysis Date', 'analysis time':'Analysis Time', 'sample detail':'Sample Detail', 'material':'Material'}, inplace=True)
+    
             if 'Analysis Date' in lab_results_df.columns and 'Analysis Time' in lab_results_df.columns:
                 lab_results_df['datetime'] = pd.to_datetime(lab_results_df['Analysis Date'] + ' ' + lab_results_df['Analysis Time'], dayfirst=True)
                 lab_results_df.sort_values('datetime', ascending=False, inplace=True)
