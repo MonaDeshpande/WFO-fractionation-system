@@ -352,7 +352,12 @@ def save_control_chart(df, series_name, out_png, title=None, units="", anomalies
         units (str, optional): The units for the y-axis. Defaults to "".
         anomalies_datetime_list (pd.DatetimeIndex, optional): The DatetimeIndex of anomalous points.
     """
-    if series_name not in df.columns:
+    # Ensure 'datetime' column is available for plotting
+    if 'datetime' not in df.columns and isinstance(df.index, pd.DatetimeIndex):
+        df = df.reset_index()
+        df = df.rename(columns={'index': 'datetime'})
+    
+    if series_name not in df.columns or 'datetime' not in df.columns:
         return False
     
     s = pd.to_numeric(df[series_name], errors='coerce')
@@ -700,7 +705,7 @@ def create_word_report(df, lab_results_df, filename, start_time, end_time):
         doc.add_paragraph(f"**Material Balance Check (Feed vs Total Out):** {feed:.3f} vs {total_out:.3f} m³/hr. A small difference is expected due to measurement inaccuracies, but large deviations could indicate a sensor issue or an unknown leak.")
 
         doc.add_paragraph(f"**Naphthalene in Feed (P-01):** {purity_c00_feed:.2f}% (from lab data)")
-        doc.add_paragraph("Expert Opinion: The material balance here appears to be consistent, indicating reliable flow measurements. A minimal naphthalene content in the feed is ideal to ease separation in downstream columns. Any significant amount would increase the load on subsequent columns.")
+        doc.add.paragraph("Expert Opinion: The material balance here appears to be consistent, indicating reliable flow measurements. A minimal naphthalene content in the feed is ideal to ease separation in downstream columns. Any significant amount would increase the load on subsequent columns.")
 
         kpi_rows.append(['C-00','FeedFlow_Mean', float(feed)])
         kpi_rows.append(['C-00','WaterRemoved_Mean', float(top)])
@@ -715,7 +720,7 @@ def create_word_report(df, lab_results_df, filename, start_time, end_time):
         details = COLUMN_ANALYSIS[col_name]
         tags = details['tags']
         doc.add_heading(f'4. {col_name} – {details["purpose"]}', level=1)
-        doc.add_paragraph(f"**Process Objective:** {details['purpose']}")
+        doc.add.paragraph(f"**Process Objective:** {details['purpose']}")
 
         # Reflux ratio analysis
         reflux_tag = tags.get('reflux_flow')
@@ -728,7 +733,7 @@ def create_word_report(df, lab_results_df, filename, start_time, end_time):
             rr_mean = float(rr.mean(skipna=True))
 
             doc.add_paragraph(f"**Average Reflux Ratio**: {rr_mean:.3f}")
-            doc.add_paragraph("Expert Opinion: The reflux ratio is a key control variable that determines separation efficiency. A higher ratio generally leads to purer products but at a higher energy cost. Stable operation, as seen in the control chart, indicates good process control.")
+            doc.add.paragraph("Expert Opinion: The reflux ratio is a key control variable that determines separation efficiency. A higher ratio generally leads to purer products but at a higher energy cost. Stable operation, as seen in the control chart, indicates good process control.")
 
             tags_for_anomaly = [t for t in [reflux_tag, top_flow_tag] if t in df.columns]
             anomalies_idx = detect_anomalies_kmeans(df, tags_for_anomaly)
@@ -736,15 +741,15 @@ def create_word_report(df, lab_results_df, filename, start_time, end_time):
             out_png = os.path.join(OUT_DIR, f"{col_name}_reflux_ratio_control.png")
             tmp = df[['datetime']].copy()
             tmp['rr'] = rr
-            tmp.set_index('datetime', inplace=True)
-
+            # NOTE: We do not set the index here to avoid the KeyError
+            
             if save_control_chart(tmp, 'rr', out_png,
                                   title=f"{col_name} Reflux Ratio Control Chart",
                                   units="(dimensionless)", anomalies_datetime_list=anomalies_idx):
                 doc.add_picture(out_png, width=Inches(6))
-                doc.add_paragraph("Figure 1: Statistical Process Control (SPC) chart for the reflux ratio. The dashed blue line represents the process average, and the red dotted lines show the 3-sigma control limits. Data points outside these limits signal a statistically significant deviation from normal operation.")
+                doc.add.paragraph("Figure 1: Statistical Process Control (SPC) chart for the reflux ratio. The dashed blue line represents the process average, and the red dotted lines show the 3-sigma control limits. Data points outside these limits signal a statistically significant deviation from normal operation.")
         else:
-            doc.add_paragraph("Reflux ratio analysis: Required tags for reflux and top product flow were not found. Skipping analysis.")
+            doc.add.paragraph("Reflux ratio analysis: Required tags for reflux and top product flow were not found. Skipping analysis.")
 
         # Packing temp gradient & heatmap
         packing_temps = tags.get('packing_temps')
@@ -754,56 +759,56 @@ def create_word_report(df, lab_results_df, filename, start_time, end_time):
                 df_cleaned[t], _ = clean_data_for_plot(df[t], upper_threshold=400) # Apply temperature filter
 
             grad_mean, grad_std = packing_temp_gradient_score(df_cleaned, packing_temps)
-            doc.add_paragraph(f"**Packing Temperature Gradient**: Mean = {grad_mean:.2f}°C/section, Std Dev = {grad_std:.2f}°C")
-            doc.add_paragraph("Expert Opinion: A stable, positive temperature gradient (low Std Dev) indicates efficient vapor-liquid mass transfer across the packing. Fluctuations or a flattened profile could suggest poor distribution, channeling, or incorrect heat input.")
+            doc.add.paragraph(f"**Packing Temperature Gradient**: Mean = {grad_mean:.2f}°C/section, Std Dev = {grad_std:.2f}°C")
+            doc.add.paragraph("Expert Opinion: A stable, positive temperature gradient (low Std Dev) indicates efficient vapor-liquid mass transfer across the packing. Fluctuations or a flattened profile could suggest poor distribution, channeling, or incorrect heat input.")
 
             out_png = os.path.join(OUT_DIR, f"{col_name}_packing_heatmap.png")
             if save_packing_heatmap(df_cleaned, packing_temps, out_png, title=f"{col_name} Packing Temperature Heatmap"):
                 doc.add_picture(out_png, width=Inches(6))
-                doc.add_paragraph("Figure 2: Heatmap of packing temperatures over time. A uniform color band from top to bottom indicates a consistent temperature profile. Hot or cold spots could signal issues like liquid channeling or a blocked section.")
+                doc.add.paragraph("Figure 2: Heatmap of packing temperatures over time. A uniform color band from top to bottom indicates a consistent temperature profile. Hot or cold spots could signal issues like liquid channeling or a blocked section.")
         else:
-            doc.add_paragraph("Packing temperature analysis: Required tags for packing temperatures were not found. Skipping analysis.")
+            doc.add.paragraph("Packing temperature analysis: Required tags for packing temperatures were not found. Skipping analysis.")
 
         # Differential pressure (DP) and flooding proxy
         dp_tag = tags.get('dp')
         if dp_tag and dp_tag in df.columns:
             flooding_status, dp_mean, dp_std = flooding_proxy_text(df, dp_tag)
-            doc.add_paragraph(f"**Delta P & Flooding Status**: {flooding_status}")
-            doc.add_paragraph(f"**Average Delta P**: {dp_mean:.2f}, **Std Dev**: {dp_std:.2f}")
-            doc.add_paragraph("Expert Opinion: The differential pressure (ΔP) across the packing is a critical indicator of column health. A sudden or sustained rise in ΔP suggests an increased pressure drop, often a key indicator of vapor-liquid buildup, which can lead to column flooding and a complete loss of separation.")
+            doc.add.paragraph(f"**Delta P & Flooding Status**: {flooding_status}")
+            doc.add.paragraph(f"**Average Delta P**: {dp_mean:.2f}, **Std Dev**: {dp_std:.2f}")
+            doc.add.paragraph("Expert Opinion: The differential pressure (ΔP) across the packing is a critical indicator of column health. A sudden or sustained rise in ΔP suggests an increased pressure drop, often a key indicator of vapor-liquid buildup, which can lead to column flooding and a complete loss of separation.")
             kpi_rows.append([col_name, 'Avg_DP', float(dp_mean)])
         else:
-            doc.add_paragraph("Differential pressure analysis: Required DP tag was not found. Skipping analysis.")
+            doc.add.paragraph("Differential pressure analysis: Required DP tag was not found. Skipping analysis.")
 
         # Purity and recovery (Lab Data Integration)
         doc.add_heading("5. Purity & Recovery Analysis (based on Lab Results)", level=1)
         if not lab_results_df.empty:
             if col_name == 'C-01':
                 purity_status, _ = purity_risk_bands(pd.Series([purity_c01_bottom]), 2.0)
-                doc.add_paragraph(f"**Anthracene Oil Purity**: {purity_c01_bottom:.2f}% Naphthalene")
-                doc.add_paragraph(f"**Purity Compliance**: {purity_status} (Target < 2%)")
+                doc.add.paragraph(f"**Anthracene Oil Purity**: {purity_c01_bottom:.2f}% Naphthalene")
+                doc.add.paragraph(f"**Purity Compliance**: {purity_status} (Target < 2%)")
                 doc.add.paragraph("Expert Opinion: This column aims to remove naphthalene from the anthracene oil bottom product. A value above the 2% target indicates that a significant amount of light components are being carried over, which could impact the final product quality of the entire plant.")
 
             elif col_name == 'C-02':
                 purity_status, _ = purity_risk_bands(pd.Series([purity_c02_top]), 15.0, limit_type='max')
-                doc.add_paragraph(f"**Light Oil Purity**: {purity_c02_top:.2f}% Naphthalene")
-                doc.add_paragraph(f"**Purity Compliance**: {purity_status} (Target < 15%)")
+                doc.add.paragraph(f"**Light Oil Purity**: {purity_c02_top:.2f}% Naphthalene")
+                doc.add.paragraph(f"**Purity Compliance**: {purity_status} (Target < 15%)")
                 doc.add.paragraph("Expert Opinion: The objective here is to ensure the top product is light oil with a minimal amount of naphthalene. A value above the 15% target suggests that the column is not effectively separating the components, leading to product contamination.")
 
             elif col_name == 'C-03':
                 recovery, _, _ = compute_recovery_efficiency(df, lab_results_df,
                                                              COLUMN_ANALYSIS['C-00']['tags']['feed'],
                                                              tags['top_flow'])
-                doc.add_paragraph(f"**Naphthalene Recovery Efficiency**: {recovery:.2f}%")
+                doc.add.paragraph(f"**Naphthalene Recovery Efficiency**: {recovery:.2f}%")
                 doc.add.paragraph("Expert Opinion: This is the primary plant KPI. It measures the amount of naphthalene recovered at the top of C-03 relative to the amount in the initial feed to C-00. A high percentage indicates excellent overall plant performance.")
 
                 purity_top_status, _ = purity_risk_bands(pd.Series([purity_c03_top]), 90.0, limit_type='min')
-                doc.add_paragraph(f"**Top Product (Naphthalene Oil) Purity**: {purity_c03_top:.2f}%")
-                doc.add_paragraph(f"**Top Purity Compliance**: {purity_top_status} (Target > 90%)")
+                doc.add.paragraph(f"**Top Product (Naphthalene Oil) Purity**: {purity_c03_top:.2f}%")
+                doc.add.paragraph(f"**Top Purity Compliance**: {purity_top_status} (Target > 90%)")
 
                 purity_bottom_status, _ = purity_risk_bands(pd.Series([purity_c03_bottom]), 2.0, limit_type='max')
-                doc.add_paragraph(f"**Bottom Product (Wash Oil) Purity**: {purity_c03_bottom:.2f}%")
-                doc.add_paragraph(f"**Bottom Purity Compliance**: {purity_bottom_status} (Target < 2%)")
+                doc.add.paragraph(f"**Bottom Product (Wash Oil) Purity**: {purity_c03_bottom:.2f}%")
+                doc.add.paragraph(f"**Bottom Purity Compliance**: {purity_bottom_status} (Target < 2%)")
                 doc.add.paragraph("Expert Opinion: This column performs the final purification step. The high concentration of naphthalene in the top product is a good sign. The low concentration in the bottom wash oil is also critical, as it indicates minimal product loss.")
 
                 doc.add_heading("6. C-03 Top Product Impurities", level=2)
@@ -814,7 +819,7 @@ def create_word_report(df, lab_results_df, filename, start_time, end_time):
                 doc.add.paragraph(f"**Quinoline (ppm):** {c03_t_data.get('Quinolin', 'N/A')}")
                 doc.add.paragraph(f"**Unknown Impurity (%):** {c03_t_data.get('Unknown Impurity%', 'N/A')}")
         else:
-            doc.add_paragraph("Lab results data not available. Skipping purity and recovery analysis.")
+            doc.add.paragraph("Lab results data not available. Skipping purity and recovery analysis.")
 
     doc.add_page_break()
 
@@ -837,7 +842,7 @@ def create_word_report(df, lab_results_df, filename, start_time, end_time):
             doc.add.paragraph("Figure 4: This plot of feed rate versus differential pressure further confirms the issue. A rapid increase in ΔP is the most reliable early indicator of flooding, as it represents the increased resistance to vapor flow caused by liquid accumulation.")
         doc.add.paragraph("Expert Opinion: The data confirms the operator's observation. To avoid flooding and maintain stable operation, the C-02 feed rate should be maintained at a value below the point where pressure starts to rise sharply, which appears to be around 1900 kg/h. This is likely the column's design limit for the current operating conditions. Future optimization efforts should focus on improving feed quality or modifying the column's internal components if a higher throughput is required.")
     else:
-        doc.add_paragraph("C-02 feed rate analysis could not be performed due to insufficient data.")
+        doc.add.paragraph("C-02 feed rate analysis could not be performed due to insufficient data.")
 
     doc.add_page_break()
 
@@ -911,7 +916,7 @@ def create_word_report(df, lab_results_df, filename, start_time, end_time):
         doc.add_heading("10. Optimal Conditions Summary", level=1)
         doc.add.paragraph("Based on the data analysis, the following conditions were associated with the highest naphthalene purity in the C-03 column:")
         
-        doc.add_paragraph("Based on the data analysis, the following conditions were associated with the highest naphthalene purity in the C-03 column:")
+        doc.add.paragraph("Based on the data analysis, the following conditions were associated with the highest naphthalene purity in the C-03 column:")
         
         doc.add_list_item(f"**Reboiler Temperature:** The analysis showed a strong positive correlation, suggesting that higher temperatures (within the 325-340°C range) were beneficial for separation.")
         doc.add_list_item(f"**Reflux Ratio:** Higher reflux ratios were consistently associated with improved separation, as expected.")
