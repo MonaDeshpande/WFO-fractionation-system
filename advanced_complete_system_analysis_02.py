@@ -719,7 +719,7 @@ def create_word_report(df, lab_results_df, report_filename, start_time, end_time
 
     # Executive Summary
     doc.add_heading('1. Executive Summary', level=1)
-    doc.add.paragraph(
+    doc.add_paragraph(
         "This report provides an in-depth analysis of plant performance, including material balance, "
         "energy efficiency, temperature profile health, and statistical process control (SPC). "
         "It also uses advanced data analysis and machine learning to offer proactive insights "
@@ -739,8 +739,8 @@ def create_word_report(df, lab_results_df, report_filename, start_time, end_time
     # ---------- Data Quality Section (Now references Excel) ----------
     try:
         doc.add_heading('2. Data Quality & Anomaly Detection', level=1)
-        doc.add.paragraph(f"During the analysis, **{num_outliers} data anomalies** were detected using a combination of thresholding and IQR methods. These points, likely caused by sensor issues or brief process upsets, have been **excluded** from the main analysis to ensure the accuracy of statistical and control charts.")
-        doc.add.paragraph("For a full list of all detected outliers, please refer to the separate **Excel file** generated alongside this report. It contains details on the timestamp and value for each anomalous data point.")
+        doc.add_paragraph(f"During the analysis, **{num_outliers} data anomalies** were detected using a combination of thresholding and IQR methods. These points, likely caused by sensor issues or brief process upsets, have been **excluded** from the main analysis to ensure the accuracy of statistical and control charts.")
+        doc.add_paragraph("For a full list of all detected outliers, please refer to the separate **Excel file** generated alongside this report. It contains details on the timestamp and value for each anomalous data point.")
         doc.add_page_break()
     except Exception as e:
         log_and_print(f"Failed to generate Data Quality section: {e}", 'error')
@@ -749,7 +749,7 @@ def create_word_report(df, lab_results_df, report_filename, start_time, end_time
     try:
         c00 = COLUMN_ANALYSIS['C-00']; tags = c00['tags']
         doc.add_heading('3. C-00 (Dehydration) – Material Balance & Performance', level=1)
-        doc.add.paragraph("Purpose: This column is a preliminary separation stage designed to remove moisture and light impurities from the raw feed before it enters the main distillation columns. Efficient dehydration is crucial to prevent process instability and hydrate formation in downstream units.")
+        doc.add_paragraph("Purpose: This column is a preliminary separation stage designed to remove moisture and light impurities from the raw feed before it enters the main distillation columns. Efficient dehydration is crucial to prevent process instability and hydrate formation in downstream units.")
 
         if have_cols(df, [tags.get('feed'), tags.get('top_flow'), tags.get('bottom_flow')]):
             feed = pd.to_numeric(df[tags['feed']], errors='coerce').mean()
@@ -757,17 +757,17 @@ def create_word_report(df, lab_results_df, report_filename, start_time, end_time
             bottom = pd.to_numeric(df[tags['bottom_flow']], errors='coerce').mean()
             total_out = top + bottom
 
-            doc.add.paragraph(f"**Average Feed Flow Rate ({tags['feed']}):** {feed:.3f} m³/hr")
-            doc.add.paragraph(f"**Average Water Removed (Top, {tags['top_flow']}):** {top:.3f} m³/hr")
-            doc.add.paragraph(f"**Average Bottom Product Flow Rate ({tags['bottom_flow']}):** {bottom:.3f} m³/hr")
-            doc.add.paragraph(f"**Material Balance Check (Feed vs Total Out):** {feed:.3f} vs {total_out:.3f} m³/hr. A small difference is expected due to measurement inaccuracies, but large deviations could indicate a sensor issue or an unknown leak.")
-            doc.add.paragraph(f"**Naphthalene in Feed (P-01):** {purity_c00_feed:.2f}% (from lab data)")
+            doc.add_paragraph(f"**Average Feed Flow Rate ({tags['feed']}):** {feed:.3f} m³/hr")
+            doc.add_paragraph(f"**Average Water Removed (Top, {tags['top_flow']}):** {top:.3f} m³/hr")
+            doc.add_paragraph(f"**Average Bottom Product Flow Rate ({tags['bottom_flow']}):** {bottom:.3f} m³/hr")
+            doc.add_paragraph(f"**Material Balance Check (Feed vs Total Out):** {feed:.3f} vs {total_out:.3f} m³/hr. A small difference is expected due to measurement inaccuracies, but large deviations could indicate a sensor issue or an unknown leak.")
+            doc.add_paragraph(f"**Naphthalene in Feed (P-01):** {purity_c00_feed:.2f}% (from lab data)")
             doc.add.paragraph("Expert Opinion: The material balance here appears to be consistent, indicating reliable flow measurements. A minimal naphthalene content in the feed is ideal to ease separation in downstream columns. Any significant amount would increase the load on subsequent columns.")
             kpi_rows.append(['C-00','FeedFlow_Mean', float(feed)])
             kpi_rows.append(['C-00','WaterRemoved_Mean', float(top)])
             kpi_rows.append(['C-00','MaterialBalanceError', float(feed-total_out)])
         else:
-            doc.add.paragraph("Required flow tag data for C-00 is incomplete. Material balance analysis cannot be performed.")
+            doc.add_paragraph("Required flow tag data for C-00 is incomplete. Material balance analysis cannot be performed.")
         doc.add_page_break()
     except Exception as e:
         log_and_print(f"Failed to generate C-00 analysis section: {e}", 'error')
@@ -778,7 +778,7 @@ def create_word_report(df, lab_results_df, report_filename, start_time, end_time
             details = COLUMN_ANALYSIS[col_name]
             tags = details['tags']
             doc.add_heading(f'4. {col_name} – {details["purpose"]}', level=1)
-            doc.add.paragraph(f"**Process Objective:** {details['purpose']}")
+            doc.add_paragraph(f"**Process Objective:** {details['purpose']}")
 
             reflux_tag = tags.get('reflux_flow')
             top_flow_tag = tags.get('top_flow')
@@ -787,8 +787,8 @@ def create_word_report(df, lab_results_df, report_filename, start_time, end_time
                 top_flow_series = pd.to_numeric(df[top_flow_tag], errors='coerce')
                 rr = reflux_flow_series / top_flow_series.replace(0, np.nan)
                 rr_mean = float(rr.mean(skipna=True))
-                doc.add.paragraph(f"**Average Reflux Ratio**: {rr_mean:.3f}")
-                doc.add.paragraph("Expert Opinion: The reflux ratio is a key control variable that determines separation efficiency. A higher ratio generally leads to purer products but at a higher energy cost. Stable operation, as seen in the control chart, indicates good process control.")
+                doc.add_paragraph(f"**Average Reflux Ratio**: {rr_mean:.3f}")
+                doc.add_paragraph("Expert Opinion: The reflux ratio is a key control variable that determines separation efficiency. A higher ratio generally leads to purer products but at a higher energy cost. Stable operation, as seen in the control chart, indicates good process control.")
 
                 tags_for_anomaly = [t for t in [reflux_tag, top_flow_tag] if t in df.columns]
                 anomalies_idx = detect_anomalies_kmeans(df, tags_for_anomaly)
@@ -800,9 +800,9 @@ def create_word_report(df, lab_results_df, report_filename, start_time, end_time
                                     title=f"{col_name} Reflux Ratio Control Chart",
                                     units="(dimensionless)", anomalies_datetime_list=anomalies_idx):
                     doc.add_picture(out_png, width=Inches(6))
-                    doc.add.paragraph("Figure 1: Statistical Process Control (SPC) chart for the reflux ratio.")
+                    doc.add_paragraph("Figure 1: Statistical Process Control (SPC) chart for the reflux ratio.")
             else:
-                doc.add.paragraph("Reflux ratio analysis: Required tags not found. Skipping.")
+                doc.add_paragraph("Reflux ratio analysis: Required tags not found. Skipping.")
 
             packing_temps = tags.get('packing_temps')
             if packing_temps and have_cols(df, packing_temps):
@@ -810,7 +810,7 @@ def create_word_report(df, lab_results_df, report_filename, start_time, end_time
                 for t in packing_temps:
                     df_cleaned[t], _ = clean_data_for_plot(df[t], upper_threshold=400)
                 grad_mean, grad_std = packing_temp_gradient_score(df_cleaned, packing_temps)
-                doc.add.paragraph(f"**Packing Temperature Gradient**: Mean = {grad_mean:.2f}°C/section, Std Dev = {grad_std:.2f}°C")
+                doc.add_paragraph(f"**Packing Temperature Gradient**: Mean = {grad_mean:.2f}°C/section, Std Dev = {grad_std:.2f}°C")
                 doc.add.paragraph("Expert Opinion: A stable, positive temperature gradient indicates efficient vapor-liquid mass transfer.")
                 out_png = os.path.join(OUT_DIR, f"{col_name}_packing_heatmap.png")
                 if save_packing_heatmap(df_cleaned, packing_temps, out_png, title=f"{col_name} Packing Temperature Heatmap"):
@@ -822,7 +822,7 @@ def create_word_report(df, lab_results_df, report_filename, start_time, end_time
             dp_tag = tags.get('dp')
             if dp_tag and dp_tag in df.columns:
                 flooding_status, dp_mean, dp_std = flooding_proxy_text(df, dp_tag)
-                doc.add.paragraph(f"**Delta P & Flooding Status**: {flooding_status}")
+                doc.add_paragraph(f"**Delta P & Flooding Status**: {flooding_status}")
                 doc.add.paragraph(f"**Average Delta P**: {dp_mean:.2f}, **Std Dev**: {dp_std:.2f}")
                 doc.add.paragraph("Expert Opinion: A sudden or sustained rise in ΔP suggests an increased pressure drop, often a key indicator of vapor-liquid buildup, which can lead to column flooding.")
                 kpi_rows.append([col_name, 'Avg_DP', float(dp_mean)])
@@ -833,7 +833,7 @@ def create_word_report(df, lab_results_df, report_filename, start_time, end_time
             if not lab_results_df.empty:
                 if col_name == 'C-01':
                     purity_status, _ = purity_risk_bands(pd.Series([purity_c01_bottom]), 2.0)
-                    doc.add.paragraph(f"**Anthracene Oil Purity**: {purity_c01_bottom:.2f}% Naphthalene")
+                    doc.add_paragraph(f"**Anthracene Oil Purity**: {purity_c01_bottom:.2f}% Naphthalene")
                     doc.add.paragraph(f"**Purity Compliance**: {purity_status} (Target < 2%)")
                 elif col_name == 'C-02':
                     purity_status, _ = purity_risk_bands(pd.Series([purity_c02_top]), 15.0, limit_type='max')
@@ -843,18 +843,18 @@ def create_word_report(df, lab_results_df, report_filename, start_time, end_time
                     recovery, _, _ = compute_recovery_efficiency(df, lab_results_df,
                                                                  COLUMN_ANALYSIS['C-00']['tags']['feed'],
                                                                  tags['top_flow'])
-                    doc.add.paragraph(f"**Naphthalene Recovery Efficiency**: {recovery:.2f}%")
+                    doc.add_paragraph(f"**Naphthalene Recovery Efficiency**: {recovery:.2f}%")
                     doc.add.paragraph("Expert Opinion: This is the primary plant KPI.")
                     purity_top_status, _ = purity_risk_bands(pd.Series([purity_c03_top]), 90.0, limit_type='min')
-                    doc.add.paragraph(f"**Top Product (Naphthalene Oil) Purity**: {purity_c03_top:.2f}%")
+                    doc.add_paragraph(f"**Top Product (Naphthalene Oil) Purity**: {purity_c03_top:.2f}%")
                     doc.add.paragraph(f"**Top Purity Compliance**: {purity_top_status} (Target > 90%)")
                     purity_bottom_status, _ = purity_risk_bands(pd.Series([purity_c03_bottom]), 2.0, limit_type='max')
-                    doc.add.paragraph(f"**Bottom Product (Wash Oil) Purity**: {purity_c03_bottom:.2f}%")
+                    doc.add_paragraph(f"**Bottom Product (Wash Oil) Purity**: {purity_c03_bottom:.2f}%")
                     doc.add.paragraph(f"**Bottom Purity Compliance**: {purity_bottom_status} (Target < 2%)")
                     doc.add_heading("6. C-03 Top Product Impurities", level=2)
                     doc.add.paragraph("This section breaks down the impurity profile of the Naphthalene Oil (NO) top product.")
                     c03_t_data = lab_results_df[lab_results_df['Sample Detail'] == 'C-03-T'].iloc[0]
-                    doc.add.paragraph(f"**Thianaphthene (%):** {c03_t_data.get('Thianaphth. %', 'N/A')}")
+                    doc.add_paragraph(f"**Thianaphthene (%):** {c03_t_data.get('Thianaphth. %', 'N/A')}")
                     doc.add.paragraph(f"**Quinoline (ppm):** {c03_t_data.get('Quinolin', 'N/A')}")
                     doc.add.paragraph(f"**Unknown Impurity (%):** {c03_t_data.get('Unknown Impurity%', 'N/A')}")
             else:
@@ -894,7 +894,7 @@ def create_word_report(df, lab_results_df, report_filename, start_time, end_time
         doc.add.paragraph("This section analyzes the use of different wash oils and their impact on C-03 operation.")
         wo_270_temp = check_wash_oil_temp_correlation(df, lab_results_df)
         if not pd.isna(wo_270_temp):
-            doc.add.paragraph(f"The analysis confirms that during the use of **WO-270°C**, the average C-03 top feed temperature was **{wo_270_temp:.2f}°C**. This aligns with the operator's practice of reducing the column top feed temperature to a range of 216-225°C when using this specific wash oil.")
+            doc.add_paragraph(f"The analysis confirms that during the use of **WO-270°C**, the average C-03 top feed temperature was **{wo_270_temp:.2f}°C**. This aligns with the operator's practice of reducing the column top feed temperature to a range of 216-225°C when using this specific wash oil.")
         else:
             doc.add.paragraph("Correlation with Wash Oil temperature could not be performed. Either WO-270°C data was not found in the lab sheet or corresponding process data was not available.")
         doc.add_page_break()
@@ -907,7 +907,7 @@ def create_word_report(df, lab_results_df, report_filename, start_time, end_time
         c03_correlations, c03_plot_data = analyze_c03_performance(df, lab_results_df)
 
         if c03_correlations is not None:
-            doc.add.paragraph("This section analyzes how key process parameters in the C-03 column correlate with the final top product purity (Naphthalene). This is achieved using **Linear Regression**, a machine learning technique that identifies and quantifies the linear relationship between two variables.")
+            doc.add_paragraph("This section analyzes how key process parameters in the C-03 column correlate with the final top product purity (Naphthalene). This is achieved using **Linear Regression**, a machine learning technique that identifies and quantifies the linear relationship between two variables.")
             doc.add.paragraph("Correlation Matrix with Naphthalene Purity (C-03 Top):")
             table = doc.add_table(rows=1, cols=2)
             hdr_cells = table.rows[0].cells
@@ -923,7 +923,7 @@ def create_word_report(df, lab_results_df, report_filename, start_time, end_time
             reboiler_plot_png = os.path.join(OUT_DIR, "C03_Reboiler_Temp_vs_Purity.png")
             if c03_plot_data['reboiler_temp'].shape[0] > 10 and save_scatter_plot_with_regression(c03_plot_data['reboiler_temp'], 'Reboiler_Temp', 'Purity_C03_Top', reboiler_plot_png, "Reboiler Temperature vs. Top Purity", "Reboiler Temperature (°C)", "Naphthalene Purity (%)"):
                 doc.add_picture(reboiler_plot_png, width=Inches(6))
-                doc.add.paragraph("Figure 5: Scatter plot showing the relationship between C-03 reboiler temperature and top product purity.")
+                doc.add_paragraph("Figure 5: Scatter plot showing the relationship between C-03 reboiler temperature and top product purity.")
             
             # Plot for Reflux Ratio vs Purity
             reflux_plot_png = os.path.join(OUT_DIR, "C03_Reflux_Ratio_vs_Purity.png")
@@ -945,10 +945,10 @@ def create_word_report(df, lab_results_df, report_filename, start_time, end_time
 
             doc.add_heading("10. Optimal Conditions Summary", level=1)
             doc.add.paragraph("Based on the data analysis, the following conditions were associated with the highest naphthalene purity in the C-03 column:")
-            doc.add_list_item(f"**Reboiler Temperature:** The analysis showed a strong positive correlation, suggesting that higher temperatures (within the 325-340°C range) were beneficial for separation.")
-            doc.add_list_item(f"**Reflux Ratio:** Higher reflux ratios were consistently associated with improved separation, as expected.")
-            doc.add_list_item(f"**Differential Pressure:** A stable, low differential pressure was observed during periods of high purity. Maintaining a ΔP below a certain threshold is critical to avoid flooding.")
-            doc.add_list_item(f"**Column Pressure:** The data indicates that lower column pressure was correlated with higher product purity, which is consistent with theoretical expectations for this type of distillation.")
+            doc.add_paragraph(f"**Reboiler Temperature:** The analysis showed a strong positive correlation, suggesting that higher temperatures (within the 325-340°C range) were beneficial for separation.")
+            doc.add_paragraph(f"**Reflux Ratio:** Higher reflux ratios were consistently associated with improved separation, as expected.")
+            doc.add_paragraph(f"**Differential Pressure:** A stable, low differential pressure was observed during periods of high purity. Maintaining a ΔP below a certain threshold is critical to avoid flooding.")
+            doc.add.paragraph(f"**Column Pressure:** The data indicates that lower column pressure was correlated with higher product purity, which is consistent with theoretical expectations for this type of distillation.")
         else:
             doc.add.paragraph("C-03 performance analysis could not be completed due to insufficient or incomplete data.")
         doc.add_page_break()
@@ -960,8 +960,8 @@ def create_word_report(df, lab_results_df, report_filename, start_time, end_time
         doc.add_heading('11. Understanding Energy Balance', level=1)
         doc.add.paragraph("A simplified energy proxy KPI was used in this report, based on the **PF66 thermic fluid flow** and temperature drop. A full **energy balance** is crucial for optimizing plant efficiency but requires more detailed data than is available in the current SCADA tags.")
         doc.add.paragraph("To perform this, you would need the following additional data points, which are typically found on the plant's P&ID (Piping and Instrumentation Diagram):")
-        doc.add_list_item("Flows, temperatures, and specific heats for all streams (feed, top product, bottom product).")
-        doc.add_list_item("An accurate specific heat capacity for the thermic fluid at operating temperatures.")
+        doc.add.paragraph("Flows, temperatures, and specific heats for all streams (feed, top product, bottom product).")
+        doc.add.paragraph("An accurate specific heat capacity for the thermic fluid at operating temperatures.")
         doc.add_page_break()
     except Exception as e:
         log_and_print(f"Failed to generate Energy Balance section: {e}", 'error')
@@ -971,10 +971,10 @@ def create_word_report(df, lab_results_df, report_filename, start_time, end_time
         doc.add_heading('12. The Value of This Analysis', level=1)
         doc.add.paragraph("This report goes beyond the capabilities of standard industrial software like Aspen and SCADA systems by providing **actionable, proactive intelligence** based on a holistic analysis of your plant data.")
         doc.add.paragraph("While **SCADA** systems are excellent for real-time monitoring and **Aspen** is a powerful design and simulation tool, neither is designed to perform the following tasks automatically and on-demand:")
-        doc.add_list_item("**Proactive Insights**: By using **Machine Learning (ARIMA)** for time series forecasting, this report predicts future process trends, allowing operators to make adjustments before a problem occurs.")
-        doc.add_list_item("**Data Quality Assurance**: The **K-Means clustering** algorithm intelligently filters out bad data points, ensuring that all analyses and reports are based on accurate and reliable information.")
-        doc.add_list_item("**Bridging the Gap**: The report seamlessly integrates real-time SCADA data with offline lab results to provide a single, unified view of plant performance, connecting process conditions to final product quality.")
-        doc.add_list_item("**Customized Problem Solving**: This script can be easily modified to address specific, ad-hoc issues like the C-02 pressure build-up problem. This flexibility allows for rapid, data-driven troubleshooting without waiting for software updates or complex reconfigurations.")
+        doc.add_paragraph("**Proactive Insights**: By using **Machine Learning (ARIMA)** for time series forecasting, this report predicts future process trends, allowing operators to make adjustments before a problem occurs.")
+        doc.add.paragraph("**Data Quality Assurance**: The **K-Means clustering** algorithm intelligently filters out bad data points, ensuring that all analyses and reports are based on accurate and reliable information.")
+        doc.add.paragraph("**Bridging the Gap**: The report seamlessly integrates real-time SCADA data with offline lab results to provide a single, unified view of plant performance, connecting process conditions to final product quality.")
+        doc.add.paragraph("**Customized Problem Solving**: This script can be easily modified to address specific, ad-hoc issues like the C-02 pressure build-up problem. This flexibility allows for rapid, data-driven troubleshooting without waiting for software updates or complex reconfigurations.")
     except Exception as e:
         log_and_print(f"Failed to generate Value of Analysis section: {e}", 'error')
 
@@ -1008,7 +1008,7 @@ def find_and_rename_column(df, search_terms, new_name):
 if __name__ == "__main__":
     table_to_analyze = 'data_cleaning_with_report'
     start_time_str = '2025-08-08 00:00:40'
-    end_time_str = '2025-08-20 12:40:00'
+    end_time_str = '2025-08-20 12:40:59'
 
     log_and_print(f"Starting analysis for table '{table_to_analyze}' from {start_time_str} to {end_time_str}...")
 
