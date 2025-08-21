@@ -69,22 +69,26 @@ COLUMN_ANALYSIS = {
     'C-00': {
         'purpose': 'Remove maximum moisture from the feed.',
         'tags': {
-            'feed': 'FI-01',
+            'feed_flow': 'FI-01',
             'top_flow': 'FI-61',  # water distillate
             'bottom_flow': 'FI-62',
             'top_temp': 'TI-01',
-            'dp': 'PI-00-DP'
+            'dp_top_pressure': 'PTT-04',
+            'dp_bottom_pressure': 'PTB-04'
         },
         'spec': {'sample':'P-01','product':'WFO','max_pct':2.0} # Placeholder spec
     },
     'C-01': {
         'purpose': 'Produce bottom Anthracene Oil (< 2% naphthalene).',
         'tags': {
-            'reflux_flow': 'FT-08',
-            'top_flow': 'FT-02',
+            'reflux_flow': 'FI-08',
+            'top_flow': 'FI-02',
+            'feed_flow': 'FI-62',
+            'bottom_flow': 'FI-05',
             'feed_temp': 'TI-02',
             'packing_temps': ['TI-03','TI-04','TI-05','TI-06'],
-            'dp': 'PI-01-DP',
+            'dp_top_pressure': 'PTT-01',
+            'dp_bottom_pressure': 'PTB-01',
             'pressure': 'PI-01'
         },
         'spec': {'sample':'C-01-B','product':'Naphthalene','max_pct':2.0}
@@ -92,24 +96,29 @@ COLUMN_ANALYSIS = {
     'C-02': {
         'purpose': 'Produce top Light Oil (< 15% naphthalene).',
         'tags': {
-            'reflux_flow': 'FT-09',
-            'top_flow': 'FT-03',
+            'reflux_flow': 'FI-09',
+            'top_flow': 'FI-03',
+            'bottom_flow': 'FI-06',
+            'feed_flow': 'FI-02', # Updated based on your input
             'feed_temp': 'TI-11',
             'packing_temps': ['TI-13','TI-14','TI-15','TI-16','TI-17','TI-18','TI-19','TI-20','TI-21','TI-22','TI-23','TI-24','TI-25'],
-            'dp': 'PI-02-DP',
-            'pressure': 'PI-02',
-            'feed_rate': 'FI-C02-FEED'
+            'dp_top_pressure': 'PTT-02',
+            'dp_bottom_pressure': 'PTB-02',
+            'pressure': 'PI-02'
         },
         'spec': {'sample':'C-02-T','product':'Naphthalene','max_pct':15.0}
     },
     'C-03': {
         'purpose': 'Recover naphthalene at top; bottom wash oil < 2% naphthalene.',
         'tags': {
-            'reflux_flow': 'FT-10',
-            'top_flow': 'FT-04',
+            'reflux_flow': 'FI-10',
+            'top_flow': 'FI-04',
+            'bottom_flow': 'FI-07',
+            'feed_flow_c02_bottom': 'FI-06', # Feed from C-02 bottom
             'feed_temp': 'TI-30',
             'packing_temps': ['TI-31','TI-32','TI-33','TI-34','TI-35','TI-36','TI-37','TI-38','TI-39','TI-40'],
-            'dp': 'PI-03-DP',
+            'dp_top_pressure': 'PTT-03',
+            'dp_bottom_pressure': 'PTB-03',
             'pressure': 'PI-03',
             'reboiler_thermic_fluid_flow': 'FI-TF-03',
             'reboiler_temp_in': 'TI-TF-03-IN',
@@ -213,9 +222,18 @@ def points_for_minutes(df, minutes, min_points=10):
     pts = int((minutes*60.0)/sec)
     return max(min_points, pts)
 
+def calculate_dp(df, top_pressure_tag, bottom_pressure_tag):
+    """Calculates differential pressure from top and bottom pressures."""
+    if have_cols(df, [top_pressure_tag, bottom_pressure_tag]):
+        df['Calculated_DP'] = pd.to_numeric(df[bottom_pressure_tag], errors='coerce') - pd.to_numeric(df[top_pressure_tag], errors='coerce')
+        return 'Calculated_DP'
+    else:
+        log_and_print(f"Warning: Missing pressure tags ({top_pressure_tag}, {bottom_pressure_tag}) for DP calculation.", 'warning')
+        return None
+
 def compute_recovery_efficiency(df, lab_df, feed_flow_tag, top_flow_tag,
-                                feed_sample='P-01', top_sample='C-03-T',
-                                product='Naphthalene'):
+                                feed_sample, top_sample,
+                                product):
     """Calculates the recovery efficiency of a product."""
     if not have_cols(df, [feed_flow_tag, top_flow_tag]):
         return np.nan, np.nan, np.nan
@@ -558,13 +576,18 @@ def analyze_c03_performance(df, lab_df, purity_tag='C-03-T'):
         # Use lab purity as the target value for the entire period
         df_temp = df.copy()
         df_temp['Purity'] = c03_purity_pct
+        
+        # Calculate C-03 DP
+        dp_c03_tag = calculate_dp(df_temp, tags.get('dp_top_pressure'), tags.get('dp_bottom_pressure'))
+        if not dp_c03_tag:
+             log_and_print("C-03 DP could not be calculated. Skipping related analysis.", 'warning')
 
         # Create the analysis DataFrame with all relevant parameters
         analysis_df = pd.DataFrame({
             'Purity_C03_Top': df_temp['Purity'],
             'Reboiler_Temp': pd.to_numeric(df_temp[tags['reboiler_temp_in']], errors='coerce'),
             'Reflux_Ratio': pd.to_numeric(df_temp[tags['reflux_flow']], errors='coerce') / pd.to_numeric(df_temp[tags['top_flow']], errors='coerce').replace(0, np.nan),
-            'Differential_Pressure': pd.to_numeric(df_temp[tags['dp']], errors='coerce'),
+            'Differential_Pressure': pd.to_numeric(df_temp[dp_c03_tag], errors='coerce') if dp_c03_tag else np.nan,
             'Column_Pressure': pd.to_numeric(df_temp[tags['pressure']], errors='coerce')
         }).dropna()
 
@@ -599,14 +622,16 @@ def analyze_c02_performance(df):
     """Analyzes C-02 feed rate vs pressure/delta P to diagnose build-up."""
     try:
         tags = COLUMN_ANALYSIS['C-02']['tags']
-        if not have_cols(df, [tags['feed_rate'], tags['pressure'], tags['dp']]):
+        dp_c02_tag = calculate_dp(df, tags.get('dp_top_pressure'), tags.get('dp_bottom_pressure'))
+        
+        if not have_cols(df, [tags['feed_flow'], tags['pressure']]) or not dp_c02_tag:
             log_and_print("Required tags for C-02 feed rate analysis not found.", 'warning')
             return None
 
         analysis_df = pd.DataFrame({
-            'Feed_Rate_kg_h': pd.to_numeric(df[tags['feed_rate']], errors='coerce'),
+            'Feed_Rate_kg_h': pd.to_numeric(df[tags['feed_flow']], errors='coerce'),
             'Column_Pressure_bar': pd.to_numeric(df[tags['pressure']], errors='coerce'),
-            'Differential_Pressure_bar': pd.to_numeric(df[tags['dp']], errors='coerce')
+            'Differential_Pressure_bar': pd.to_numeric(df[dp_c02_tag], errors='coerce')
         }).dropna()
 
         if analysis_df.empty:
@@ -717,8 +742,8 @@ def create_word_report(df, lab_results_df, report_filename, start_time, end_time
         "This report provides an in-depth analysis of plant performance, including material balance, "
         "energy efficiency, temperature profile health, and statistical process control (SPC). "
         "It also uses advanced data analysis and machine learning to offer proactive insights "
-        "and diagnose specific operational challenges. The analysis aims to help operators and engineers "
-        "quickly identify potential issues and optimize operations."
+        "and diagnose specific operational challenges. It incorporates the latest process flow data "
+        "you provided."
     )
     doc.add_page_break()
 
@@ -740,19 +765,19 @@ def create_word_report(df, lab_results_df, report_filename, start_time, end_time
     except Exception as e:
         log_and_print(f"Failed to generate Data Quality section: {e}", 'error')
 
-    # ---------- C-00 Moisture Removal ----------
+    # ---------- C-00 Material Balance ----------
     try:
         c00 = COLUMN_ANALYSIS['C-00']; tags = c00['tags']
         doc.add_heading('3. C-00 (Dehydration) – Material Balance & Performance', level=1)
         doc.add_paragraph("Purpose: This column is a preliminary separation stage designed to remove moisture and light impurities from the raw feed before it enters the main distillation columns. Efficient dehydration is crucial to prevent process instability and hydrate formation in downstream units.")
 
-        if have_cols(df, [tags.get('feed'), tags.get('top_flow'), tags.get('bottom_flow')]):
-            feed = pd.to_numeric(df[tags['feed']], errors='coerce').mean()
+        if have_cols(df, [tags.get('feed_flow'), tags.get('top_flow'), tags.get('bottom_flow')]):
+            feed = pd.to_numeric(df[tags['feed_flow']], errors='coerce').mean()
             top = pd.to_numeric(df[tags['top_flow']], errors='coerce').mean()
             bottom = pd.to_numeric(df[tags['bottom_flow']], errors='coerce').mean()
             total_out = top + bottom
 
-            doc.add_paragraph(f"**Average Feed Flow Rate ({tags['feed']}):** {feed:.3f} m³/hr")
+            doc.add_paragraph(f"**Average Feed Flow Rate ({tags['feed_flow']}):** {feed:.3f} m³/hr")
             doc.add_paragraph(f"**Average Water Removed (Top, {tags['top_flow']}):** {top:.3f} m³/hr")
             doc.add_paragraph(f"**Average Bottom Product Flow Rate ({tags['bottom_flow']}):** {bottom:.3f} m³/hr")
             doc.add_paragraph(f"**Material Balance Check (Feed vs Total Out):** {feed:.3f} vs {total_out:.3f} m³/hr. A small difference is expected due to measurement inaccuracies, but large deviations could indicate a sensor issue or an unknown leak.")
@@ -767,98 +792,121 @@ def create_word_report(df, lab_results_df, report_filename, start_time, end_time
     except Exception as e:
         log_and_print(f"Failed to generate C-00 analysis section: {e}", 'error')
 
-    # ---------- C-01 / C-02 / C-03 (Detailed Analysis) ----------
-    for col_name in ['C-01', 'C-02', 'C-03']:
-        try:
-            details = COLUMN_ANALYSIS[col_name]
-            tags = details['tags']
-            doc.add_heading(f'4. {col_name} – {details["purpose"]}', level=1)
-            doc.add_paragraph(f"**Process Objective:** {details['purpose']}")
 
-            reflux_tag = tags.get('reflux_flow')
-            top_flow_tag = tags.get('top_flow')
-            if reflux_tag in df.columns and top_flow_tag in df.columns:
-                reflux_flow_series = pd.to_numeric(df[reflux_tag], errors='coerce')
-                top_flow_series = pd.to_numeric(df[top_flow_tag], errors='coerce')
-                rr = reflux_flow_series / top_flow_series.replace(0, np.nan)
-                rr_mean = float(rr.mean(skipna=True))
-                doc.add_paragraph(f"**Average Reflux Ratio**: {rr_mean:.3f}")
-                doc.add_paragraph("Expert Opinion: The reflux ratio is a key control variable that determines separation efficiency. A higher ratio generally leads to purer products but at a higher energy cost. Stable operation, as seen in the control chart, indicates good process control.")
+    # ---------- C-01 Detailed Analysis ----------
+    try:
+        col_name = 'C-01'; details = COLUMN_ANALYSIS[col_name]; tags = details['tags']
+        doc.add_heading(f'4. {col_name} – {details["purpose"]}', level=1)
+        doc.add_paragraph(f"**Process Objective:** {details['purpose']}")
+        
+        # C-01 Material Balance
+        if have_cols(df, [tags.get('feed_flow'), tags.get('top_flow'), tags.get('bottom_flow')]):
+            feed_c01 = pd.to_numeric(df[tags['feed_flow']], errors='coerce').mean()
+            top_c01 = pd.to_numeric(df[tags['top_flow']], errors='coerce').mean()
+            bottom_c01 = pd.to_numeric(df[tags['bottom_flow']], errors='coerce').mean()
+            total_out_c01 = top_c01 + bottom_c01
+            doc.add_paragraph(f"**Average Feed Flow Rate ({tags['feed_flow']}):** {feed_c01:.3f} m³/hr")
+            doc.add_paragraph(f"**Average Top Product Flow Rate ({tags['top_flow']}):** {top_c01:.3f} m³/hr")
+            doc.add_paragraph(f"**Average Bottom Product Flow Rate ({tags['bottom_flow']}):** {bottom_c01:.3f} m³/hr")
+            doc.add_paragraph(f"**Material Balance Check (Feed vs Total Out):** {feed_c01:.3f} vs {total_out_c01:.3f} m³/hr.")
+        else:
+            doc.add_paragraph("Required flow tag data for C-01 is incomplete. Material balance analysis cannot be performed.")
+            
+        # Purity and DP
+        purity_status, _ = purity_risk_bands(pd.Series([purity_c01_bottom]), 2.0)
+        doc.add_paragraph(f"**Anthracene Oil Purity**: {purity_c01_bottom:.2f}% Naphthalene")
+        doc.add_paragraph(f"**Purity Compliance**: {purity_status} (Target < 2%)")
+        
+        dp_c01_tag = calculate_dp(df, tags.get('dp_top_pressure'), tags.get('dp_bottom_pressure'))
+        if dp_c01_tag:
+             flooding_status, dp_mean, dp_std = flooding_proxy_text(df, dp_c01_tag)
+             doc.add_paragraph(f"**Delta P & Flooding Status**: {flooding_status}")
+             doc.add_paragraph(f"**Average Delta P**: {dp_mean:.2f}, **Std Dev**: {dp_std:.2f}")
+        else:
+            doc.add_paragraph("Differential pressure analysis: Required DP tags were not found. Skipping analysis.")
 
-                tags_for_anomaly = [t for t in [reflux_tag, top_flow_tag] if t in df.columns]
-                anomalies_idx = detect_anomalies_kmeans(df, tags_for_anomaly)
+        doc.add_page_break()
+    except Exception as e:
+        log_and_print(f"Failed to generate C-01 analysis section: {e}", 'error')
+        
+    # ---------- C-02 Detailed Analysis ----------
+    try:
+        col_name = 'C-02'; details = COLUMN_ANALYSIS[col_name]; tags = details['tags']
+        doc.add_heading(f'5. {col_name} – {details["purpose"]}', level=1)
+        doc.add_paragraph(f"**Process Objective:** {details['purpose']}")
+        
+        # C-02 Material Balance
+        if have_cols(df, [tags.get('feed_flow'), tags.get('top_flow'), tags.get('bottom_flow')]):
+            feed_c02 = pd.to_numeric(df[tags['feed_flow']], errors='coerce').mean()
+            top_c02 = pd.to_numeric(df[tags['top_flow']], errors='coerce').mean()
+            bottom_c02 = pd.to_numeric(df[tags['bottom_flow']], errors='coerce').mean()
+            total_out_c02 = top_c02 + bottom_c02
+            doc.add_paragraph(f"**Average Feed Flow Rate ({tags['feed_flow']}):** {feed_c02:.3f} m³/hr")
+            doc.add_paragraph(f"**Average Top Product Flow Rate ({tags['top_flow']}):** {top_c02:.3f} m³/hr")
+            doc.add_paragraph(f"**Average Bottom Product Flow Rate ({tags['bottom_flow']}):** {bottom_c02:.3f} m³/hr")
+            doc.add_paragraph(f"**Material Balance Check (Feed vs Total Out):** {feed_c02:.3f} vs {total_out_c02:.3f} m³/hr.")
+        else:
+            doc.add_paragraph("Required flow tag data for C-02 is incomplete. Material balance analysis cannot be performed.")
 
-                out_png = os.path.join(OUT_DIR, f"{col_name}_reflux_ratio_control.png")
-                tmp = df[['datetime']].copy()
-                tmp['rr'] = rr
-                if save_control_chart(tmp, 'rr', out_png,
-                                     title=f"{col_name} Reflux Ratio Control Chart",
-                                     units="(dimensionless)", anomalies_datetime_list=anomalies_idx):
-                    doc.add_picture(out_png, width=Inches(6))
-                    doc.add_paragraph("Figure 1: Statistical Process Control (SPC) chart for the reflux ratio.")
-            else:
-                doc.add_paragraph("Reflux ratio analysis: Required tags not found. Skipping.")
+        # Purity and DP
+        purity_status, _ = purity_risk_bands(pd.Series([purity_c02_top]), 15.0, limit_type='max')
+        doc.add_paragraph(f"**Light Oil Purity**: {purity_c02_top:.2f}% Naphthalene")
+        doc.add_paragraph(f"**Purity Compliance**: {purity_status} (Target < 15%)")
+        
+        dp_c02_tag = calculate_dp(df, tags.get('dp_top_pressure'), tags.get('dp_bottom_pressure'))
+        if dp_c02_tag:
+             flooding_status, dp_mean, dp_std = flooding_proxy_text(df, dp_c02_tag)
+             doc.add_paragraph(f"**Delta P & Flooding Status**: {flooding_status}")
+             doc.add_paragraph(f"**Average Delta P**: {dp_mean:.2f}, **Std Dev**: {dp_std:.2f}")
+        else:
+            doc.add_paragraph("Differential pressure analysis: Required DP tags were not found. Skipping analysis.")
+            
+        doc.add_page_break()
+    except Exception as e:
+        log_and_print(f"Failed to generate C-02 analysis section: {e}", 'error')
 
-            packing_temps = tags.get('packing_temps')
-            if packing_temps and have_cols(df, packing_temps):
-                # Use the original data directly, as per instructions
-                grad_mean, grad_std = packing_temp_gradient_score(df, packing_temps)
-                doc.add_paragraph(f"**Packing Temperature Gradient**: Mean = {grad_mean:.2f}°C/section, Std Dev = {grad_std:.2f}°C")
-                doc.add_paragraph("Expert Opinion: A stable, positive temperature gradient indicates efficient vapor-liquid mass transfer.")
-                out_png = os.path.join(OUT_DIR, f"{col_name}_packing_heatmap.png")
-                if save_packing_heatmap(df, packing_temps, out_png, title=f"{col_name} Packing Temperature Heatmap"):
-                    doc.add_picture(out_png, width=Inches(6))
-                    doc.add_paragraph("Figure 2: Heatmap of packing temperatures over time.")
-            else:
-                doc.add_paragraph("Packing temperature analysis: Required tags not found. Skipping.")
+    # ---------- C-03 Detailed Analysis ----------
+    try:
+        col_name = 'C-03'; details = COLUMN_ANALYSIS[col_name]; tags = details['tags']
+        doc.add_heading(f'6. {col_name} – {details["purpose"]}', level=1)
+        doc.add_paragraph(f"**Process Objective:** {details['purpose']}")
+        
+        # C-03 Material Balance
+        if have_cols(df, [tags.get('feed_flow_c02_bottom'), tags.get('top_flow'), tags.get('bottom_flow')]):
+            feed_c03 = pd.to_numeric(df[tags['feed_flow_c02_bottom']], errors='coerce').mean()
+            top_c03 = pd.to_numeric(df[tags['top_flow']], errors='coerce').mean()
+            bottom_c03 = pd.to_numeric(df[tags['bottom_flow']], errors='coerce').mean()
+            total_out_c03 = top_c03 + bottom_c03
+            doc.add_paragraph(f"**Average Feed Flow Rate ({tags['feed_flow_c02_bottom']}):** {feed_c03:.3f} m³/hr")
+            doc.add_paragraph(f"**Average Top Product Flow Rate ({tags['top_flow']}):** {top_c03:.3f} m³/hr")
+            doc.add_paragraph(f"**Average Bottom Product Flow Rate ({tags['bottom_flow']}):** {bottom_c03:.3f} m³/hr")
+            doc.add_paragraph(f"**Material Balance Check (Feed vs Total Out):** {feed_c03:.3f} vs {total_out_c03:.3f} m³/hr.")
+        else:
+            doc.add_paragraph("Required flow tag data for C-03 is incomplete. Material balance analysis cannot be performed.")
 
-            dp_tag = tags.get('dp')
-            if dp_tag and dp_tag in df.columns:
-                flooding_status, dp_mean, dp_std = flooding_proxy_text(df, dp_tag)
-                doc.add_paragraph(f"**Delta P & Flooding Status**: {flooding_status}")
-                doc.add_paragraph(f"**Average Delta P**: {dp_mean:.2f}, **Std Dev**: {dp_std:.2f}")
-                doc.add_paragraph("Expert Opinion: A sudden or sustained rise in ΔP suggests an increased pressure drop, often a key indicator of vapor-liquid buildup, which can lead to column flooding.")
-                kpi_rows.append([col_name, 'Avg_DP', float(dp_mean)])
-            else:
-                doc.add_paragraph("Differential pressure analysis: Required DP tag was not found. Skipping analysis.")
+        # Purity and DP
+        purity_top_status, _ = purity_risk_bands(pd.Series([purity_c03_top]), 90.0, limit_type='min')
+        doc.add_paragraph(f"**Top Product (Naphthalene Oil) Purity**: {purity_c03_top:.2f}%")
+        doc.add_paragraph(f"**Top Purity Compliance**: {purity_top_status} (Target > 90%)")
+        purity_bottom_status, _ = purity_risk_bands(pd.Series([purity_c03_bottom]), 2.0, limit_type='max')
+        doc.add_paragraph(f"**Bottom Purity Compliance**: {purity_bottom_status} (Target < 2%)")
+        
+        dp_c03_tag = calculate_dp(df, tags.get('dp_top_pressure'), tags.get('dp_bottom_pressure'))
+        if dp_c03_tag:
+             flooding_status, dp_mean, dp_std = flooding_proxy_text(df, dp_c03_tag)
+             doc.add_paragraph(f"**Delta P & Flooding Status**: {flooding_status}")
+             doc.add_paragraph(f"**Average Delta P**: {dp_mean:.2f}, **Std Dev**: {dp_std:.2f}")
+        else:
+            doc.add_paragraph("Differential pressure analysis: Required DP tags were not found. Skipping analysis.")
 
-            doc.add_heading("5. Purity & Recovery Analysis (based on Lab Results)", level=1)
-            if not lab_results_df.empty:
-                if col_name == 'C-01':
-                    purity_status, _ = purity_risk_bands(pd.Series([purity_c01_bottom]), 2.0)
-                    doc.add_paragraph(f"**Anthracene Oil Purity**: {purity_c01_bottom:.2f}% Naphthalene")
-                    doc.add_paragraph(f"**Purity Compliance**: {purity_status} (Target < 2%)")
-                elif col_name == 'C-02':
-                    purity_status, _ = purity_risk_bands(pd.Series([purity_c02_top]), 15.0, limit_type='max')
-                    doc.add_paragraph(f"**Light Oil Purity**: {purity_c02_top:.2f}% Naphthalene")
-                    doc.add_paragraph(f"**Purity Compliance**: {purity_status} (Target < 15%)")
-                elif col_name == 'C-03':
-                    recovery, _, _ = compute_recovery_efficiency(df, lab_results_df,
-                                                                 COLUMN_ANALYSIS['C-00']['tags']['feed'],
-                                                                 tags['top_flow'])
-                    doc.add_paragraph(f"**Naphthalene Recovery Efficiency**: {recovery:.2f}%")
-                    doc.add_paragraph("Expert Opinion: This is the primary plant KPI.")
-                    purity_top_status, _ = purity_risk_bands(pd.Series([purity_c03_top]), 90.0, limit_type='min')
-                    doc.add_paragraph(f"**Top Product (Naphthalene Oil) Purity**: {purity_c03_top:.2f}%")
-                    doc.add_paragraph(f"**Top Purity Compliance**: {purity_top_status} (Target > 90%)")
-                    purity_bottom_status, _ = purity_risk_bands(pd.Series([purity_c03_bottom]), 2.0, limit_type='max')
-                    doc.add_paragraph(f"**Bottom Purity Compliance**: {purity_bottom_status} (Target < 2%)")
-                    doc.add_heading("6. C-03 Top Product Impurities", level=2)
-                    doc.add_paragraph("This section breaks down the impurity profile of the Naphthalene Oil (NO) top product.")
-                    c03_t_data = lab_results_df[lab_results_df['Sample Detail'] == 'C-03-T'].iloc[0]
-                    doc.add_paragraph(f"**Thianaphthene (%):** {c03_t_data.get('Thianaphth. %', 'N/A')}")
-                    doc.add_paragraph(f"**Quinoline (ppm):** {c03_t_data.get('Quinolin', 'N/A')}")
-                    doc.add_paragraph(f"**Unknown Impurity (%):** {c03_t_data.get('Unknown Impurity%', 'N/A')}")
-            else:
-                doc.add_paragraph("Lab results data not available. Skipping purity and recovery analysis.")
-            doc.add_page_break()
-        except Exception as e:
-            log_and_print(f"Failed to generate analysis for {col_name}: {e}", 'error')
+        doc.add_page_break()
+    except Exception as e:
+        log_and_print(f"Failed to generate C-03 analysis section: {e}", 'error')
 
     # --------------- C-02 Specific Analysis ---------------------------------------
     try:
         doc.add_heading('7. C-02 Feed Rate & Pressure Build-up Analysis', level=1)
-        doc.add_paragraph("This section addresses the operator-reported issue of pressure build-up when the feed rate to Column C-02 exceeds 1900 kg/h.")
+        doc.add_paragraph("This section addresses the operator-reported issue of pressure build-up in Column C-02 when the feed rate from Column C-01 exceeds 1900 kg/h.")
         c02_analysis_df = analyze_c02_performance(df)
         if c02_analysis_df is not None:
             feed_rate_plot_png = os.path.join(OUT_DIR, "C02_Feed_Rate_vs_Pressure.png")
