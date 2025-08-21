@@ -49,7 +49,7 @@ from openpyxl.utils.dataframe import dataframe_to_rows
 # Set up logging and the utility function at the top of the file
 LOG_FILE = "analysis_log.txt"
 logging.basicConfig(filename=LOG_FILE, level=logging.INFO,
-                    format='%(asctime)s - %(levelname)s - %(message)s')
+                    format='%(asctime)ss - %(levelname)s - %(message)s')
 
 def log_and_print(message, level='info'):
     """Logs a message to a file and prints it to the console."""
@@ -214,9 +214,13 @@ def lab_value(lab_df, sample, product, default=np.nan):
     if lab_df.empty:
         return default
     try:
+        # Correctly use 'Sample Detail' and 'Material' columns
         m = lab_df[(lab_df['Sample Detail']==sample) & (lab_df['Material']==product)]
         # Take the most recent value
         return float(m['Naphth. % by GC'].iloc[0]) if not m.empty else default
+    except KeyError as e:
+        log_and_print(f"Warning: Lab data column missing. Error: {e}", 'warning')
+        return default
     except Exception as e:
         log_and_print(f"Warning: Could not get lab value for {sample} - {product}. Error: {e}", 'warning')
         return default
@@ -786,7 +790,7 @@ def create_word_report(df, lab_results_df, report_filename, start_time, end_time
     
     # ---------- C-00 Material Balance & Moisture Analysis ----------
     doc.add_heading('3. C-00 (Dehydration) – Material Balance & Moisture Analysis', level=1)
-    doc.add_paragraph("Purpose: This column is a preliminary separation stage designed to remove moisture from the feed. This is crucial to prevent process instability and hydrate formation in downstream units.")
+    doc.add_paragraph("Purpose: This column is a preliminary separation stage designed to remove moisture and light impurities from the feed.")
     c00_mb = analysis_results.get('c00_material_balance')
     if c00_mb:
         doc.add_paragraph(f"**Average Feed Flow Rate ({COLUMN_ANALYSIS['C-00']['tags']['feed_flow']}):** {c00_mb['feed']:.3f} m³/hr")
@@ -794,6 +798,7 @@ def create_word_report(df, lab_results_df, report_filename, start_time, end_time
         doc.add_paragraph(f"**Average Bottom Product Flow Rate ({COLUMN_ANALYSIS['C-00']['tags']['bottom_flow']}):** {c00_mb['bottom']:.3f} m³/hr")
         doc.add_paragraph(f"**Material Balance Check (Feed vs Total Out):** {c00_mb['feed']:.3f} vs {c00_mb['total_out']:.3f} m³/hr.")
         doc.add_paragraph(f"**Feed Moisture Content (from Lab Report):** {c00_mb['moisture_in_feed']:.2f}%")
+        doc.add_paragraph(f"**Unknown Impurity in Feed (from Lab Report):** {c00_mb['unknown_impurity_in_feed']:.2f}%")
         doc.add_paragraph("The lab report does not provide moisture content for the C-00 bottom product, so the exact moisture removal efficiency cannot be calculated from the given lab data.")
     else:
         doc.add_paragraph("Required flow tag data for C-00 is incomplete. Material balance analysis cannot be performed.")
@@ -972,7 +977,7 @@ def create_word_report(df, lab_results_df, report_filename, start_time, end_time
 # --------------- MAIN EXECUTION -----------------------------------------------
 
 if __name__ == "__main__":
-    table_to_analyze = 'data_cleaning_with_report'
+    table_to_analyze = 'wide_scada_data'
     start_time_str = '2025-08-08 00:00:40'
     end_time_str = '2025-08-20 12:40:59'
 
@@ -996,20 +1001,19 @@ if __name__ == "__main__":
         try:
             lab_results_df = pd.read_csv(LAB_RESULTS_FILE)
             log_and_print(f"Successfully loaded lab results from {LAB_RESULTS_FILE}.")
-
+            
             # --- CORRECTED COLUMN RENAMING ---
-            # Now using exact column names from the provided images
-            lab_results_df.rename(columns={
-                'Analysis Date': 'Analysis Date',
-                'Analysis Time': 'Analysis Time',
-                'Sample Detail': 'Sample Detail',
-                'Material': 'Material',
-                'Naphth. % by GC': 'Naphth. % by GC',
-                'Thianaphth. %': 'Thianaphth. %',
-                'Quinoline in ppm': 'Quinoline in ppm',
-                'Unknown Impurity%': 'Unknown Impurity%',
-                'Mois. %': 'Mois. %'
-            }, inplace=True)
+            # Now using a flexible find-and-rename approach to handle minor spelling differences
+            # This is the most crucial fix.
+            find_and_rename_column(lab_results_df, ['analysis date'], 'Analysis Date')
+            find_and_rename_column(lab_results_df, ['analysis time'], 'Analysis Time')
+            find_and_rename_column(lab_results_df, ['naphth', '% by gc'], 'Naphth. % by GC')
+            find_and_rename_column(lab_results_df, ['thianaphth', '%'], 'Thianaphth. %')
+            find_and_rename_column(lab_results_df, ['quinoline', 'ppm'], 'Quinoline in ppm')
+            find_and_rename_column(lab_results_df, ['unknown impurity', '%'], 'Unknown Impurity%')
+            find_and_rename_column(lab_results_df, ['mois', '%'], 'Mois. %')
+            find_and_rename_column(lab_results_df, ['sample detail'], 'Sample Detail')
+            find_and_rename_column(lab_results_df, ['material'], 'Material')
 
             # Convert date/time after renaming
             if 'Analysis Date' in lab_results_df.columns and 'Analysis Time' in lab_results_df.columns:
@@ -1032,12 +1036,14 @@ if __name__ == "__main__":
             top = pd.to_numeric(df[c00_tags['top_flow']], errors='coerce').mean()
             bottom = pd.to_numeric(df[c00_tags['bottom_flow']], errors='coerce').mean()
             moisture_in_feed = get_lab_impurity_value(lab_results_df, 'P-01', 'Mois. %')
+            unknown_impurity_in_feed = get_lab_impurity_value(lab_results_df, 'P-01', 'Unknown Impurity%')
             analysis_results['c00_material_balance'] = {
                 'feed': feed,
                 'top': top,
                 'bottom': bottom,
                 'total_out': top + bottom,
-                'moisture_in_feed': moisture_in_feed
+                'moisture_in_feed': moisture_in_feed,
+                'unknown_impurity_in_feed': unknown_impurity_in_feed
             }
         
         # C-01 Analysis
