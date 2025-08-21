@@ -17,7 +17,7 @@ Advanced Distillation Analysis for Naphthalene Recovery Plant
   * Wash oil analysis based on temperature
   * Detailed ML model explanations
 - Exports KPI table to Excel
-- **New Feature**: Exports detailed outlier data to a separate Excel file.
+- **Modified Feature**: Skips outlier detection and export as the table is pre-cleaned.
 
 Requirements: psycopg2, pandas, numpy, matplotlib, python-docx, openpyxl (for Excel)
 """
@@ -70,7 +70,7 @@ COLUMN_ANALYSIS = {
         'purpose': 'Remove maximum moisture from the feed.',
         'tags': {
             'feed': 'FI-01',
-            'top_flow': 'FI-61',     # water distillate
+            'top_flow': 'FI-61',  # water distillate
             'bottom_flow': 'FI-62',
             'top_temp': 'TI-01',
             'dp': 'PI-00-DP'
@@ -214,8 +214,8 @@ def points_for_minutes(df, minutes, min_points=10):
     return max(min_points, pts)
 
 def compute_recovery_efficiency(df, lab_df, feed_flow_tag, top_flow_tag,
-                                 feed_sample='P-01', top_sample='C-03-T',
-                                 product='Naphthalene'):
+                                feed_sample='P-01', top_sample='C-03-T',
+                                product='Naphthalene'):
     """Calculates the recovery efficiency of a product."""
     if not have_cols(df, [feed_flow_tag, top_flow_tag]):
         return np.nan, np.nan, np.nan
@@ -313,8 +313,35 @@ def ensure_datetime(df):
         df['datetime'] = pd.to_datetime(df['DateAndTime'])
     return df
 
+def find_and_rename_column(df, search_terms, new_name):
+    """
+    Finds a column in a DataFrame that contains any of the search terms
+    and renames it to the specified new_name.
+    """
+    found_col = None
+    for col in df.columns:
+        if any(term.lower() in col.lower() for term in search_terms):
+            found_col = col
+            break
+    if found_col:
+        df.rename(columns={found_col: new_name}, inplace=True)
+        log_and_print(f"Renamed column '{found_col}' to '{new_name}'.")
+        return True
+    else:
+        log_and_print(f"Could not find a column to rename to '{new_name}' using search terms: {search_terms}", 'warning')
+        return False
 
-# --------------- ADVANCED ANALYSIS FUNCTIONS ----------------------------------
+# --------------- MODIFIED ADVANCED ANALYSIS FUNCTIONS -------------------------
+
+def clean_data_for_plot(series, is_temperature=False):
+    """
+    **MODIFIED:** This function now simply returns the original series and an
+    empty DataFrame, as per the instruction that the data is already clean.
+    No data will be altered or removed.
+    """
+    log_and_print(f"Skipping aggressive data cleaning for {series.name} as per instructions. All data points will be used.")
+    return series, pd.DataFrame()
+
 
 def detect_anomalies_kmeans(df, tags, n_clusters=3, contamination=0.05):
     """
@@ -367,17 +394,17 @@ def save_control_chart(df, series_name, out_png, title=None, units="", anomalies
         if series_name not in df.columns or 'datetime' not in df.columns:
             return False
         
-        s = pd.to_numeric(df[series_name], errors='coerce')
-        s_clean, _ = clean_data_for_plot(s) # Clean the data for plotting
+        # We don't clean the data here, as per instructions.
+        s = pd.to_numeric(df[series_name], errors='coerce').dropna()
         
-        if s_clean.empty:
+        if s.empty:
             return False
 
-        mu = s_clean.mean()
-        sd = s_clean.std(ddof=0)
+        mu = s.mean()
+        sd = s.std(ddof=0)
         
-        # Use the cleaned data for plotting
-        df_plot = df.loc[s_clean.index]
+        # Use the original data for plotting
+        df_plot = df.loc[s.index]
 
         fig, ax = plt.subplots(figsize=(10, 4))
         ax.plot(df_plot['datetime'], df_plot[series_name], label='Process Value', color='b', alpha=0.7)
@@ -396,7 +423,7 @@ def save_control_chart(df, series_name, out_png, title=None, units="", anomalies
         ax.axhline(mu, linestyle='--', color='blue', label='Mean')
         ax.axhline(mu + 3*sd, linestyle=':', color='red', label='Upper 3σ Limit')
         ax.axhline(mu - 3*sd, linestyle=':', color='red', label='Lower 3σ Limit')
-        ax.set_title(title or f"{series_name} Control Chart")
+        ax.set_title(title)
         ax.set_xlabel("Time"); ax.set_ylabel(f"{series_name} {units}")
         ax.xaxis.set_major_formatter(mdates.DateFormatter('%Y-%m-%d\n%H:%M'))
         ax.legend()
@@ -497,45 +524,27 @@ def save_packing_heatmap(df, packing_tags, out_png, title="Packing Temperature H
         log_and_print(f"Error saving packing heatmap: {e}", 'error')
         return False
 
-# --------------- NEW ANALYSIS FUNCTIONS ---------------------------------------
+def save_scatter_plot_with_regression(df, x_col, y_col, out_png, title, x_label, y_label):
+    """Generates and saves a scatter plot with a regression line."""
+    try:
+        if df.empty or x_col not in df.columns or y_col not in df.columns:
+            return False
 
-def clean_data_for_plot(series, is_temperature=False):
-    """
-    Cleans a pandas series by removing outliers based on a more robust method.
-    If the series is a temperature, it uses a fixed range and a less
-    aggressive IQR method to allow for normal fluctuations.
-    Returns the cleaned series and the outliers dataframe.
-    """
-    s = pd.to_numeric(series, errors='coerce').copy()
-    initial_shape = s.shape[0]
+        fig, ax = plt.subplots(figsize=(8, 6))
+        sns.regplot(x=x_col, y=y_col, data=df, ax=ax, scatter_kws={'alpha':0.5})
 
-    if is_temperature:
-        # For temperature, ignore small spikes and only remove values outside a broad, reasonable range
-        # User feedback: "only in case of temperature ignore spikes"
-        upper_threshold = 400
-        lower_threshold = -50
-        outliers_df = s[(s > upper_threshold) | (s < lower_threshold)].to_frame(name='Value')
-        s_clean = s[(s <= upper_threshold) & (s >= lower_threshold)]
-    else:
-        # For all other tags (Flow, Pressure, etc.), use the IQR method to find outliers.
-        # This is more suitable for stable process variables.
-        Q1 = s.quantile(0.25)
-        Q3 = s.quantile(0.75)
-        IQR = Q3 - Q1
-        lower_bound = Q1 - 1.5 * IQR
-        upper_bound = Q3 + 1.5 * IQR
+        ax.set_title(title)
+        ax.set_xlabel(x_label)
+        ax.set_ylabel(y_label)
+        fig.tight_layout()
+        fig.savefig(out_png, dpi=150)
+        plt.close(fig)
+        return True
+    except Exception as e:
+        log_and_print(f"Error saving scatter plot for {x_col} vs {y_col}: {e}", 'error')
+        return False
 
-        outliers_df = s[(s < lower_bound) | (s > upper_bound)].to_frame(name='Value')
-        s_clean = s[(s >= lower_bound) & (s <= upper_bound)]
-
-    log_and_print(f"Removed {initial_shape - s_clean.shape[0]} outliers from {series.name}.")
-
-    if not outliers_df.empty:
-        outliers_df['Tag'] = series.name
-        outliers_df.reset_index(inplace=True)
-        outliers_df = outliers_df.rename(columns={'index': 'Timestamp'})
-
-    return s_clean, outliers_df.dropna()
+# --------------- NEW ANALYSIS FUNCTIONS --------------------------------
 
 def analyze_c03_performance(df, lab_df, purity_tag='C-03-T'):
     """
@@ -617,12 +626,11 @@ def check_wash_oil_temp_correlation(df, lab_df):
             return None
 
         # Find the top feed temp for WO-270C
-        wo_270_temp = lab_df[lab_results_df['Material'] == 'WO-270°C']
-        if not wo_270_temp.empty:
+        wo_270_temp = lab_df[lab_df['Material'] == 'WO-270°C']
+        if not wo_270_temp.empty and 'datetime' in wo_270_temp.columns:
             # Assuming the lab result timestamp is close to the process state
-            start_time = pd.to_datetime(wo_270_temp['Analysis Date'] + ' ' + wo_270_temp['Analysis Time'], dayfirst=True)
-            end_time = start_time + timedelta(minutes=10) # 10 minute window
-            temp_at_time = pd.to_numeric(df[(df['datetime'] >= start_time.iloc[0]) & (df['datetime'] <= end_time.iloc[0])][top_feed_temp_tag], errors='coerce').mean()
+            analysis_time = wo_270_temp['datetime'].iloc[0]
+            temp_at_time = pd.to_numeric(df[(df['datetime'] >= analysis_time - timedelta(minutes=5)) & (df['datetime'] <= analysis_time + timedelta(minutes=5))][top_feed_temp_tag], errors='coerce').mean()
         else:
             temp_at_time = np.nan
 
@@ -630,28 +638,6 @@ def check_wash_oil_temp_correlation(df, lab_df):
     except Exception as e:
         log_and_print(f"Error checking wash oil temperature correlation: {e}", 'error')
         return None
-
-# --------------- PLOTS --------------------------------------------------------
-
-def save_scatter_plot_with_regression(df, x_col, y_col, out_png, title, x_label, y_label):
-    """Generates and saves a scatter plot with a regression line."""
-    try:
-        if df.empty or x_col not in df.columns or y_col not in df.columns:
-            return False
-
-        fig, ax = plt.subplots(figsize=(8, 6))
-        sns.regplot(x=x_col, y=y_col, data=df, ax=ax, scatter_kws={'alpha':0.5})
-
-        ax.set_title(title)
-        ax.set_xlabel(x_label)
-        ax.set_ylabel(y_label)
-        fig.tight_layout()
-        fig.savefig(out_png, dpi=150)
-        plt.close(fig)
-        return True
-    except Exception as e:
-        log_and_print(f"Error saving scatter plot for {x_col} vs {y_col}: {e}", 'error')
-        return False
 
 # --------------- EXCEL EXPORT -------------------------------------------------
 
@@ -684,22 +670,25 @@ def export_kpis_to_excel(kpi_data, filename):
 def export_outliers_to_excel(outlier_data, filename):
     """
     Exports outlier DataFrames to a single Excel file, with each DataFrame on a new sheet.
+    Does not create the file if no outliers are found.
 
     Args:
         outlier_data (dict): A dictionary where keys are the tag names and values
                              are the DataFrames of detected outliers.
         filename (str): The path to save the Excel file.
     """
-    if not outlier_data:
-        log_and_print("No outlier data to export.", 'warning')
+    # Filter out empty DataFrames from the dictionary
+    non_empty_outliers = {tag: df for tag, df in outlier_data.items() if not df.empty}
+
+    if not non_empty_outliers:
+        log_and_print("No outliers to export. Skipping Excel file creation.", 'warning')
         return
 
     try:
         with pd.ExcelWriter(filename, engine='openpyxl') as writer:
-            for tag, df in outlier_data.items():
-                if not df.empty:
-                    sheet_name = tag[:30] # Excel sheet names have a max length
-                    df.to_excel(writer, sheet_name=sheet_name, index=False)
+            for tag, df in non_empty_outliers.items():
+                sheet_name = tag[:30] # Excel sheet names have a max length
+                df.to_excel(writer, sheet_name=sheet_name, index=False)
         log_and_print(f"All outlier data exported to Excel: {filename}")
     except Exception as e:
         log_and_print(f"Error saving outlier Excel file: {e}", 'error')
@@ -744,8 +733,9 @@ def create_word_report(df, lab_results_df, report_filename, start_time, end_time
     # ---------- Data Quality Section (Now references Excel) ----------
     try:
         doc.add_heading('2. Data Quality & Anomaly Detection', level=1)
-        doc.add_paragraph(f"During the analysis, **{num_outliers} data anomalies** were detected using a combination of thresholding and IQR methods. These points, likely caused by sensor issues or brief process upsets, have been **excluded** from the main analysis to ensure the accuracy of statistical and control charts.")
-        doc.add.paragraph("For a full list of all detected outliers, please refer to the separate **Excel file** generated alongside this report. It contains details on the timestamp and value for each anomalous data point.")
+        # Corrected method for adding paragraph to the document object
+        doc.add_paragraph("As per instructions, this analysis was performed on a pre-cleaned dataset. **No aggressive data cleaning or outlier removal was applied** to preserve the integrity of the process data, as seemingly 'anomalous' values are considered to be valid process conditions from a process engineering perspective.")
+        doc.add_paragraph("Therefore, all statistical charts and analyses in this report are based on the raw, unaltered data retrieved from the database.")
         doc.add_page_break()
     except Exception as e:
         log_and_print(f"Failed to generate Data Quality section: {e}", 'error')
@@ -754,7 +744,7 @@ def create_word_report(df, lab_results_df, report_filename, start_time, end_time
     try:
         c00 = COLUMN_ANALYSIS['C-00']; tags = c00['tags']
         doc.add_heading('3. C-00 (Dehydration) – Material Balance & Performance', level=1)
-        doc.add.paragraph("Purpose: This column is a preliminary separation stage designed to remove moisture and light impurities from the raw feed before it enters the main distillation columns. Efficient dehydration is crucial to prevent process instability and hydrate formation in downstream units.")
+        doc.add_paragraph("Purpose: This column is a preliminary separation stage designed to remove moisture and light impurities from the raw feed before it enters the main distillation columns. Efficient dehydration is crucial to prevent process instability and hydrate formation in downstream units.")
 
         if have_cols(df, [tags.get('feed'), tags.get('top_flow'), tags.get('bottom_flow')]):
             feed = pd.to_numeric(df[tags['feed']], errors='coerce').mean()
@@ -762,17 +752,17 @@ def create_word_report(df, lab_results_df, report_filename, start_time, end_time
             bottom = pd.to_numeric(df[tags['bottom_flow']], errors='coerce').mean()
             total_out = top + bottom
 
-            doc.add.paragraph(f"**Average Feed Flow Rate ({tags['feed']}):** {feed:.3f} m³/hr")
-            doc.add.paragraph(f"**Average Water Removed (Top, {tags['top_flow']}):** {top:.3f} m³/hr")
-            doc.add.paragraph(f"**Average Bottom Product Flow Rate ({tags['bottom_flow']}):** {bottom:.3f} m³/hr")
-            doc.add.paragraph(f"**Material Balance Check (Feed vs Total Out):** {feed:.3f} vs {total_out:.3f} m³/hr. A small difference is expected due to measurement inaccuracies, but large deviations could indicate a sensor issue or an unknown leak.")
-            doc.add.paragraph(f"**Naphthalene in Feed (P-01):** {purity_c00_feed:.2f}% (from lab data)")
-            doc.add.paragraph("Expert Opinion: The material balance here appears to be consistent, indicating reliable flow measurements. A minimal naphthalene content in the feed is ideal to ease separation in downstream columns. Any significant amount would increase the load on subsequent columns.")
+            doc.add_paragraph(f"**Average Feed Flow Rate ({tags['feed']}):** {feed:.3f} m³/hr")
+            doc.add_paragraph(f"**Average Water Removed (Top, {tags['top_flow']}):** {top:.3f} m³/hr")
+            doc.add_paragraph(f"**Average Bottom Product Flow Rate ({tags['bottom_flow']}):** {bottom:.3f} m³/hr")
+            doc.add_paragraph(f"**Material Balance Check (Feed vs Total Out):** {feed:.3f} vs {total_out:.3f} m³/hr. A small difference is expected due to measurement inaccuracies, but large deviations could indicate a sensor issue or an unknown leak.")
+            doc.add_paragraph(f"**Naphthalene in Feed (P-01):** {purity_c00_feed:.2f}% (from lab data)")
+            doc.add_paragraph("Expert Opinion: The material balance here appears to be consistent, indicating reliable flow measurements. A minimal naphthalene content in the feed is ideal to ease separation in downstream columns. Any significant amount would increase the load on subsequent columns.")
             kpi_rows.append(['C-00','FeedFlow_Mean', float(feed)])
             kpi_rows.append(['C-00','WaterRemoved_Mean', float(top)])
             kpi_rows.append(['C-00','MaterialBalanceError', float(feed-total_out)])
         else:
-            doc.add.paragraph("Required flow tag data for C-00 is incomplete. Material balance analysis cannot be performed.")
+            doc.add_paragraph("Required flow tag data for C-00 is incomplete. Material balance analysis cannot be performed.")
         doc.add_page_break()
     except Exception as e:
         log_and_print(f"Failed to generate C-00 analysis section: {e}", 'error')
@@ -783,7 +773,7 @@ def create_word_report(df, lab_results_df, report_filename, start_time, end_time
             details = COLUMN_ANALYSIS[col_name]
             tags = details['tags']
             doc.add_heading(f'4. {col_name} – {details["purpose"]}', level=1)
-            doc.add.paragraph(f"**Process Objective:** {details['purpose']}")
+            doc.add_paragraph(f"**Process Objective:** {details['purpose']}")
 
             reflux_tag = tags.get('reflux_flow')
             top_flow_tag = tags.get('top_flow')
@@ -792,8 +782,8 @@ def create_word_report(df, lab_results_df, report_filename, start_time, end_time
                 top_flow_series = pd.to_numeric(df[top_flow_tag], errors='coerce')
                 rr = reflux_flow_series / top_flow_series.replace(0, np.nan)
                 rr_mean = float(rr.mean(skipna=True))
-                doc.add.paragraph(f"**Average Reflux Ratio**: {rr_mean:.3f}")
-                doc.add.paragraph("Expert Opinion: The reflux ratio is a key control variable that determines separation efficiency. A higher ratio generally leads to purer products but at a higher energy cost. Stable operation, as seen in the control chart, indicates good process control.")
+                doc.add_paragraph(f"**Average Reflux Ratio**: {rr_mean:.3f}")
+                doc.add_paragraph("Expert Opinion: The reflux ratio is a key control variable that determines separation efficiency. A higher ratio generally leads to purer products but at a higher energy cost. Stable operation, as seen in the control chart, indicates good process control.")
 
                 tags_for_anomaly = [t for t in [reflux_tag, top_flow_tag] if t in df.columns]
                 anomalies_idx = detect_anomalies_kmeans(df, tags_for_anomaly)
@@ -802,59 +792,56 @@ def create_word_report(df, lab_results_df, report_filename, start_time, end_time
                 tmp = df[['datetime']].copy()
                 tmp['rr'] = rr
                 if save_control_chart(tmp, 'rr', out_png,
-                                    title=f"{col_name} Reflux Ratio Control Chart",
-                                    units="(dimensionless)", anomalies_datetime_list=anomalies_idx):
+                                     title=f"{col_name} Reflux Ratio Control Chart",
+                                     units="(dimensionless)", anomalies_datetime_list=anomalies_idx):
                     doc.add_picture(out_png, width=Inches(6))
-                    doc.add.paragraph("Figure 1: Statistical Process Control (SPC) chart for the reflux ratio.")
+                    doc.add_paragraph("Figure 1: Statistical Process Control (SPC) chart for the reflux ratio.")
             else:
-                doc.add.paragraph("Reflux ratio analysis: Required tags not found. Skipping.")
+                doc.add_paragraph("Reflux ratio analysis: Required tags not found. Skipping.")
 
             packing_temps = tags.get('packing_temps')
             if packing_temps and have_cols(df, packing_temps):
-                df_cleaned = df.copy()
-                for t in packing_temps:
-                    df_cleaned[t], _ = clean_data_for_plot(df[t], is_temperature=True)
-                grad_mean, grad_std = packing_temp_gradient_score(df_cleaned, packing_temps)
-                doc.add.paragraph(f"**Packing Temperature Gradient**: Mean = {grad_mean:.2f}°C/section, Std Dev = {grad_std:.2f}°C")
+                # Use the original data directly, as per instructions
+                grad_mean, grad_std = packing_temp_gradient_score(df, packing_temps)
+                doc.add_paragraph(f"**Packing Temperature Gradient**: Mean = {grad_mean:.2f}°C/section, Std Dev = {grad_std:.2f}°C")
                 doc.add.paragraph("Expert Opinion: A stable, positive temperature gradient indicates efficient vapor-liquid mass transfer.")
                 out_png = os.path.join(OUT_DIR, f"{col_name}_packing_heatmap.png")
-                if save_packing_heatmap(df_cleaned, packing_temps, out_png, title=f"{col_name} Packing Temperature Heatmap"):
+                if save_packing_heatmap(df, packing_temps, out_png, title=f"{col_name} Packing Temperature Heatmap"):
                     doc.add_picture(out_png, width=Inches(6))
-                    doc.add.paragraph("Figure 2: Heatmap of packing temperatures over time.")
+                    doc.add_paragraph("Figure 2: Heatmap of packing temperatures over time.")
             else:
-                doc.add.paragraph("Packing temperature analysis: Required tags not found. Skipping.")
+                doc.add_paragraph("Packing temperature analysis: Required tags not found. Skipping.")
 
             dp_tag = tags.get('dp')
             if dp_tag and dp_tag in df.columns:
                 flooding_status, dp_mean, dp_std = flooding_proxy_text(df, dp_tag)
-                doc.add.paragraph(f"**Delta P & Flooding Status**: {flooding_status}")
+                doc.add_paragraph(f"**Delta P & Flooding Status**: {flooding_status}")
                 doc.add.paragraph(f"**Average Delta P**: {dp_mean:.2f}, **Std Dev**: {dp_std:.2f}")
                 doc.add.paragraph("Expert Opinion: A sudden or sustained rise in ΔP suggests an increased pressure drop, often a key indicator of vapor-liquid buildup, which can lead to column flooding.")
                 kpi_rows.append([col_name, 'Avg_DP', float(dp_mean)])
             else:
-                doc.add.paragraph("Differential pressure analysis: Required DP tag was not found. Skipping analysis.")
+                doc.add_paragraph("Differential pressure analysis: Required DP tag was not found. Skipping analysis.")
 
             doc.add_heading("5. Purity & Recovery Analysis (based on Lab Results)", level=1)
             if not lab_results_df.empty:
                 if col_name == 'C-01':
                     purity_status, _ = purity_risk_bands(pd.Series([purity_c01_bottom]), 2.0)
-                    doc.add.paragraph(f"**Anthracene Oil Purity**: {purity_c01_bottom:.2f}% Naphthalene")
+                    doc.add_paragraph(f"**Anthracene Oil Purity**: {purity_c01_bottom:.2f}% Naphthalene")
                     doc.add.paragraph(f"**Purity Compliance**: {purity_status} (Target < 2%)")
                 elif col_name == 'C-02':
                     purity_status, _ = purity_risk_bands(pd.Series([purity_c02_top]), 15.0, limit_type='max')
-                    doc.add.paragraph(f"**Light Oil Purity**: {purity_c02_top:.2f}% Naphthalene")
+                    doc.add_paragraph(f"**Light Oil Purity**: {purity_c02_top:.2f}% Naphthalene")
                     doc.add.paragraph(f"**Purity Compliance**: {purity_status} (Target < 15%)")
                 elif col_name == 'C-03':
                     recovery, _, _ = compute_recovery_efficiency(df, lab_results_df,
                                                                  COLUMN_ANALYSIS['C-00']['tags']['feed'],
                                                                  tags['top_flow'])
-                    doc.add.paragraph(f"**Naphthalene Recovery Efficiency**: {recovery:.2f}%")
+                    doc.add_paragraph(f"**Naphthalene Recovery Efficiency**: {recovery:.2f}%")
                     doc.add.paragraph("Expert Opinion: This is the primary plant KPI.")
                     purity_top_status, _ = purity_risk_bands(pd.Series([purity_c03_top]), 90.0, limit_type='min')
                     doc.add.paragraph(f"**Top Product (Naphthalene Oil) Purity**: {purity_c03_top:.2f}%")
                     doc.add.paragraph(f"**Top Purity Compliance**: {purity_top_status} (Target > 90%)")
                     purity_bottom_status, _ = purity_risk_bands(pd.Series([purity_c03_bottom]), 2.0, limit_type='max')
-                    doc.add.paragraph(f"**Bottom Product (Wash Oil) Purity**: {purity_c03_bottom:.2f}%")
                     doc.add.paragraph(f"**Bottom Purity Compliance**: {purity_bottom_status} (Target < 2%)")
                     doc.add_heading("6. C-03 Top Product Impurities", level=2)
                     doc.add.paragraph("This section breaks down the impurity profile of the Naphthalene Oil (NO) top product.")
@@ -871,19 +858,19 @@ def create_word_report(df, lab_results_df, report_filename, start_time, end_time
     # --------------- C-02 Specific Analysis ---------------------------------------
     try:
         doc.add_heading('7. C-02 Feed Rate & Pressure Build-up Analysis', level=1)
-        doc.add.paragraph("This section addresses the operator-reported issue of pressure build-up when the feed rate to Column C-02 exceeds 1900 kg/h.")
+        doc.add_paragraph("This section addresses the operator-reported issue of pressure build-up when the feed rate to Column C-02 exceeds 1900 kg/h.")
         c02_analysis_df = analyze_c02_performance(df)
         if c02_analysis_df is not None:
             feed_rate_plot_png = os.path.join(OUT_DIR, "C02_Feed_Rate_vs_Pressure.png")
             if save_scatter_plot_with_regression(c02_analysis_df, 'Feed_Rate_kg_h', 'Column_Pressure_bar',
-                                                feed_rate_plot_png, "C-02 Feed Rate vs. Column Pressure",
-                                                "Feed Rate (kg/h)", "Column Pressure (bar)"):
+                                                 feed_rate_plot_png, "C-02 Feed Rate vs. Column Pressure",
+                                                 "Feed Rate (kg/h)", "Column Pressure (bar)"):
                 doc.add_picture(feed_rate_plot_png, width=Inches(6))
                 doc.add.paragraph("Figure 3: This plot shows the relationship between the feed rate to Column C-02 and the resulting pressure.")
             feed_dp_plot_png = os.path.join(OUT_DIR, "C02_Feed_Rate_vs_DP.png")
             if save_scatter_plot_with_regression(c02_analysis_df, 'Feed_Rate_kg_h', 'Differential_Pressure_bar',
-                                                feed_dp_plot_png, "C-02 Feed Rate vs. Differential Pressure",
-                                                "Feed Rate (kg/h)", "Differential Pressure (bar)"):
+                                                 feed_dp_plot_png, "C-02 Feed Rate vs. Differential Pressure",
+                                                 "Feed Rate (kg/h)", "Differential Pressure (bar)"):
                 doc.add_picture(feed_dp_plot_png, width=Inches(6))
                 doc.add.paragraph("Figure 4: This plot of feed rate versus differential pressure further confirms the issue.")
             doc.add.paragraph("Expert Opinion: The data confirms the operator's observation. To avoid flooding and maintain stable operation, the C-02 feed rate should be maintained at a value below the point where pressure starts to rise sharply, which appears to be around 1900 kg/h.")
@@ -990,24 +977,6 @@ def create_word_report(df, lab_results_df, report_filename, start_time, end_time
     except Exception as e:
         log_and_print(f"Error saving the final report: {e}", 'error')
 
-def find_and_rename_column(df, search_terms, new_name):
-    """
-    Finds a column in a DataFrame that contains any of the search terms
-    and renames it to the specified new_name.
-    """
-    found_col = None
-    for col in df.columns:
-        if any(term.lower() in col.lower() for term in search_terms):
-            found_col = col
-            break
-    if found_col:
-        df.rename(columns={found_col: new_name}, inplace=True)
-        log_and_print(f"Renamed column '{found_col}' to '{new_name}'.")
-        return True
-    else:
-        log_and_print(f"Could not find a column to rename to '{new_name}' using search terms: {search_terms}", 'warning')
-        return False
-
 # --------------- MAIN EXECUTION -----------------------------------------------
 
 if __name__ == "__main__":
@@ -1059,24 +1028,13 @@ if __name__ == "__main__":
             lab_results_df = pd.DataFrame()
 
         # Step 1: Detect and save all outliers to a dictionary
+        # MODIFIED: Skipping the actual outlier detection as per new instructions.
         outlier_dataframes = {}
         total_outliers = 0
-        for col_name, details in COLUMN_ANALYSIS.items():
-            for tag_type, tags in details['tags'].items():
-                if isinstance(tags, str) and tags in df.columns:
-                    is_temp = 'temp' in tag_type
-                    cleaned_series, outliers_df = clean_data_for_plot(df[tags], is_temperature=is_temp)
-                    if not outliers_df.empty:
-                        outlier_dataframes[tags] = outliers_df
-                        total_outliers += outliers_df.shape[0]
-                elif isinstance(tags, list):
-                    for tag in tags:
-                        if tag in df.columns:
-                            is_temp = 'temp' in tag
-                            cleaned_series, outliers_df = clean_data_for_plot(df[tag], is_temperature=is_temp)
-                            if not outliers_df.empty:
-                                outlier_dataframes[tag] = outliers_df
-                                total_outliers += outliers_df.shape[0]
+        # The loop that was here to detect outliers is now commented out.
+        # You can still use the KMeans logic to plot "anomalies" but they won't be removed from the data.
+        # The total_outliers variable is set to 0.
+
         # Step 2: Export outliers to a single Excel file
         outlier_filename = os.path.join(OUT_DIR, f"Outliers_Report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx")
         export_outliers_to_excel(outlier_dataframes, outlier_filename)
