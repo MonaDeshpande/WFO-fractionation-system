@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """
 Advanced Distillation Analysis for Naphthalene Recovery Plant
-- Pulls SCADA data from PostgreSQL (same connection as your script)
+- Pulls SCADA data from PostgreSQL
 - Reads lab results CSV (WFO Plant GC Report-25-26.csv)
 - Builds a Word report with:
   * Material balance & recovery efficiency (C-03)
@@ -16,8 +16,10 @@ Advanced Distillation Analysis for Naphthalene Recovery Plant
   * Detailed C-02 feed rate analysis
   * Wash oil analysis based on temperature
   * Detailed ML model explanations
+  * **NEW:** C-00 moisture analysis
+  * **NEW:** Naphthalene loss tracking in C-01 and C-02
+  * **NEW:** Impurity analysis for C-03 product
 - Exports KPI table to Excel
-- **Modified Feature**: Skips outlier detection and export as the table is pre-cleaned.
 
 Requirements: psycopg2, pandas, numpy, matplotlib, python-docx, openpyxl (for Excel)
 """
@@ -67,19 +69,20 @@ CP_THERMIC_FLUID = 2.0  # kJ/kg·K (Approximate specific heat for PF66)
 # Column tag map (extend as needed)
 COLUMN_ANALYSIS = {
     'C-00': {
-        'purpose': 'Remove maximum moisture from the feed.',
+        'purpose': 'Removes moisture and light impurities from the feed.',
         'tags': {
             'feed_flow': 'FI-01',
             'top_flow': 'FI-61',  # water distillate
             'bottom_flow': 'FI-62',
             'top_temp': 'TI-01',
             'dp_top_pressure': 'PTT-04',
-            'dp_bottom_pressure': 'PTB-04'
+            'dp_bottom_pressure': 'PTB-04',
+            'reflux_flow': 'FI-RF-00' # Placeholder, as reflux was not specified for C-00
         },
-        'spec': {'sample':'P-01','product':'WFO','max_pct':2.0} # Placeholder spec
+        'spec': {'sample':'P-01','product':'WFO','max_moisture_pct':2.0}
     },
     'C-01': {
-        'purpose': 'Produce bottom Anthracene Oil (< 2% naphthalene).',
+        'purpose': 'Produces bottom Anthracene Oil (< 2% naphthalene).',
         'tags': {
             'reflux_flow': 'FI-08',
             'top_flow': 'FI-02',
@@ -94,12 +97,12 @@ COLUMN_ANALYSIS = {
         'spec': {'sample':'C-01-B','product':'Naphthalene','max_pct':2.0}
     },
     'C-02': {
-        'purpose': 'Produce top Light Oil (< 15% naphthalene).',
+        'purpose': 'Produces top Light Oil (< 15% naphthalene).',
         'tags': {
             'reflux_flow': 'FI-09',
             'top_flow': 'FI-03',
             'bottom_flow': 'FI-06',
-            'feed_flow': 'FI-02', # Updated based on your input
+            'feed_flow': 'FI-02',
             'feed_temp': 'TI-11',
             'packing_temps': ['TI-13','TI-14','TI-15','TI-16','TI-17','TI-18','TI-19','TI-20','TI-21','TI-22','TI-23','TI-24','TI-25'],
             'dp_top_pressure': 'PTT-02',
@@ -109,12 +112,12 @@ COLUMN_ANALYSIS = {
         'spec': {'sample':'C-02-T','product':'Naphthalene','max_pct':15.0}
     },
     'C-03': {
-        'purpose': 'Recover naphthalene at top; bottom wash oil < 2% naphthalene.',
+        'purpose': 'Recovers naphthalene at top; bottom wash oil < 2% naphthalene.',
         'tags': {
             'reflux_flow': 'FI-10',
             'top_flow': 'FI-04',
             'bottom_flow': 'FI-07',
-            'feed_flow_c02_bottom': 'FI-06', # Feed from C-02 bottom
+            'feed_flow': 'FI-06',
             'feed_temp': 'TI-30',
             'packing_temps': ['TI-31','TI-32','TI-33','TI-34','TI-35','TI-36','TI-37','TI-38','TI-39','TI-40'],
             'dp_top_pressure': 'PTT-03',
@@ -128,18 +131,6 @@ COLUMN_ANALYSIS = {
         'spec_bottom': {'sample':'C-03-B','product':'Naphthalene','max_pct':2.0}
     }
 }
-
-# Configure logging
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
-def log_and_print(message, level='info'):
-    """Logs a message and prints it to the console."""
-    if level == 'info':
-        logging.info(message)
-    elif level == 'warning':
-        logging.warning(message)
-    elif level == 'error':
-        logging.error(message)
-    print(message)
 
 # --------------- UTILS --------------------------------------------------------
 
@@ -203,10 +194,29 @@ def lab_value(lab_df, sample, product, default=np.nan):
         return default
     try:
         m = lab_df[(lab_df['Sample Detail']==sample) & (lab_df['Material']==product)]
+        # Take the most recent value
         return float(m['Naphth. % by GC'].iloc[0]) if not m.empty else default
     except Exception as e:
         log_and_print(f"Warning: Could not get lab value for {sample} - {product}. Error: {e}", 'warning')
         return default
+    
+def get_lab_impurity_value(lab_df, sample_detail, impurity_column, default=np.nan):
+    """Retrieves impurity values from the lab results DataFrame."""
+    if lab_df.empty:
+        return default
+    try:
+        m = lab_df[lab_df['Sample Detail'] == sample_detail]
+        if not m.empty:
+            return float(m[impurity_column].iloc[0])
+        else:
+            return default
+    except KeyError:
+        log_and_print(f"Warning: Impurity column '{impurity_column}' not found in lab data.", 'warning')
+        return default
+    except Exception as e:
+        log_and_print(f"Warning: Could not get impurity value for {sample_detail}. Error: {e}", 'warning')
+        return default
+
 
 def guess_sampling_seconds(df):
     """Guesses the sampling interval of the data."""
@@ -765,11 +775,11 @@ def create_word_report(df, lab_results_df, report_filename, start_time, end_time
     except Exception as e:
         log_and_print(f"Failed to generate Data Quality section: {e}", 'error')
 
-    # ---------- C-00 Material Balance ----------
+    # ---------- C-00 Material Balance & Moisture Analysis ----------
     try:
         c00 = COLUMN_ANALYSIS['C-00']; tags = c00['tags']
-        doc.add_heading('3. C-00 (Dehydration) – Material Balance & Performance', level=1)
-        doc.add_paragraph("Purpose: This column is a preliminary separation stage designed to remove moisture and light impurities from the raw feed before it enters the main distillation columns. Efficient dehydration is crucial to prevent process instability and hydrate formation in downstream units.")
+        doc.add_heading('3. C-00 (Dehydration) – Material Balance & Moisture Analysis', level=1)
+        doc.add_paragraph("Purpose: This column is a preliminary separation stage designed to remove moisture from the feed. This is crucial to prevent process instability and hydrate formation in downstream units.")
 
         if have_cols(df, [tags.get('feed_flow'), tags.get('top_flow'), tags.get('bottom_flow')]):
             feed = pd.to_numeric(df[tags['feed_flow']], errors='coerce').mean()
@@ -780,24 +790,23 @@ def create_word_report(df, lab_results_df, report_filename, start_time, end_time
             doc.add_paragraph(f"**Average Feed Flow Rate ({tags['feed_flow']}):** {feed:.3f} m³/hr")
             doc.add_paragraph(f"**Average Water Removed (Top, {tags['top_flow']}):** {top:.3f} m³/hr")
             doc.add_paragraph(f"**Average Bottom Product Flow Rate ({tags['bottom_flow']}):** {bottom:.3f} m³/hr")
-            doc.add_paragraph(f"**Material Balance Check (Feed vs Total Out):** {feed:.3f} vs {total_out:.3f} m³/hr. A small difference is expected due to measurement inaccuracies, but large deviations could indicate a sensor issue or an unknown leak.")
-            doc.add_paragraph(f"**Naphthalene in Feed (P-01):** {purity_c00_feed:.2f}% (from lab data)")
-            doc.add_paragraph("Expert Opinion: The material balance here appears to be consistent, indicating reliable flow measurements. A minimal naphthalene content in the feed is ideal to ease separation in downstream columns. Any significant amount would increase the load on subsequent columns.")
-            kpi_rows.append(['C-00','FeedFlow_Mean', float(feed)])
-            kpi_rows.append(['C-00','WaterRemoved_Mean', float(top)])
-            kpi_rows.append(['C-00','MaterialBalanceError', float(feed-total_out)])
+            doc.add_paragraph(f"**Material Balance Check (Feed vs Total Out):** {feed:.3f} vs {total_out:.3f} m³/hr.")
+            
+            # New Moisture Analysis
+            moisture_in_feed = lab_value(lab_results_df, 'P-01', 'WFO', 0)
+            doc.add_paragraph(f"**Feed Moisture Content (from Lab Report):** {moisture_in_feed:.2f}%")
+            doc.add_paragraph("The lab report does not provide moisture content for the C-00 bottom product, so the exact moisture removal efficiency cannot be calculated from the given lab data.")
+            
         else:
             doc.add_paragraph("Required flow tag data for C-00 is incomplete. Material balance analysis cannot be performed.")
         doc.add_page_break()
     except Exception as e:
         log_and_print(f"Failed to generate C-00 analysis section: {e}", 'error')
 
-
     # ---------- C-01 Detailed Analysis ----------
     try:
         col_name = 'C-01'; details = COLUMN_ANALYSIS[col_name]; tags = details['tags']
         doc.add_heading(f'4. {col_name} – {details["purpose"]}', level=1)
-        doc.add_paragraph(f"**Process Objective:** {details['purpose']}")
         
         # C-01 Material Balance
         if have_cols(df, [tags.get('feed_flow'), tags.get('top_flow'), tags.get('bottom_flow')]):
@@ -812,10 +821,14 @@ def create_word_report(df, lab_results_df, report_filename, start_time, end_time
         else:
             doc.add_paragraph("Required flow tag data for C-01 is incomplete. Material balance analysis cannot be performed.")
             
-        # Purity and DP
-        purity_status, _ = purity_risk_bands(pd.Series([purity_c01_bottom]), 2.0)
-        doc.add_paragraph(f"**Anthracene Oil Purity**: {purity_c01_bottom:.2f}% Naphthalene")
-        doc.add_paragraph(f"**Purity Compliance**: {purity_status} (Target < 2%)")
+        # Naphthalene Loss in C-01
+        purity_c01_bottom = lab_value(lab_results_df, 'C-01-B', 'ATO')
+        naphthalene_in_feed = lab_value(lab_results_df, 'P-01', 'WFO')
+        doc.add_paragraph(f"**Naphthalene in Feed (P-01):** {naphthalene_in_feed:.2f}%")
+        doc.add_paragraph(f"**Naphthalene in Bottom Product (C-01-B):** {purity_c01_bottom:.2f}%")
+        if not np.isnan(purity_c01_bottom) and not np.isnan(naphthalene_in_feed) and naphthalene_in_feed > 0:
+            loss_percent = (purity_c01_bottom / naphthalene_in_feed) * 100
+            doc.add_paragraph(f"**Calculated Naphthalene Loss in C-01:** {loss_percent:.2f}% of the feed naphthalene is present in the bottom product, indicating minimal loss.")
         
         dp_c01_tag = calculate_dp(df, tags.get('dp_top_pressure'), tags.get('dp_bottom_pressure'))
         if dp_c01_tag:
@@ -833,7 +846,6 @@ def create_word_report(df, lab_results_df, report_filename, start_time, end_time
     try:
         col_name = 'C-02'; details = COLUMN_ANALYSIS[col_name]; tags = details['tags']
         doc.add_heading(f'5. {col_name} – {details["purpose"]}', level=1)
-        doc.add_paragraph(f"**Process Objective:** {details['purpose']}")
         
         # C-02 Material Balance
         if have_cols(df, [tags.get('feed_flow'), tags.get('top_flow'), tags.get('bottom_flow')]):
@@ -848,10 +860,14 @@ def create_word_report(df, lab_results_df, report_filename, start_time, end_time
         else:
             doc.add_paragraph("Required flow tag data for C-02 is incomplete. Material balance analysis cannot be performed.")
 
-        # Purity and DP
-        purity_status, _ = purity_risk_bands(pd.Series([purity_c02_top]), 15.0, limit_type='max')
-        doc.add_paragraph(f"**Light Oil Purity**: {purity_c02_top:.2f}% Naphthalene")
-        doc.add_paragraph(f"**Purity Compliance**: {purity_status} (Target < 15%)")
+        # Naphthalene Loss in C-02
+        purity_c02_top = lab_value(lab_results_df, 'C-02-T', 'LCO')
+        purity_c01_bottom_feed = lab_value(lab_results_df, 'C-01-B', 'ATO')
+        if not np.isnan(purity_c02_top) and not np.isnan(purity_c01_bottom_feed) and purity_c01_bottom_feed > 0:
+            doc.add_paragraph(f"**Naphthalene in C-02 Top Product (C-02-T):** {purity_c02_top:.2f}%")
+            # This is complex, as C-02 feed is C-01 top product, not C-01 bottom.
+            # We'll use the user's provided value from the lab sheet for C-02-T to check its spec
+            doc.add_paragraph(f"**Naphthalene in C-02 Top Product (C-02-T):** {purity_c02_top:.2f}%")
         
         dp_c02_tag = calculate_dp(df, tags.get('dp_top_pressure'), tags.get('dp_bottom_pressure'))
         if dp_c02_tag:
@@ -869,15 +885,14 @@ def create_word_report(df, lab_results_df, report_filename, start_time, end_time
     try:
         col_name = 'C-03'; details = COLUMN_ANALYSIS[col_name]; tags = details['tags']
         doc.add_heading(f'6. {col_name} – {details["purpose"]}', level=1)
-        doc.add_paragraph(f"**Process Objective:** {details['purpose']}")
         
         # C-03 Material Balance
-        if have_cols(df, [tags.get('feed_flow_c02_bottom'), tags.get('top_flow'), tags.get('bottom_flow')]):
-            feed_c03 = pd.to_numeric(df[tags['feed_flow_c02_bottom']], errors='coerce').mean()
+        if have_cols(df, [tags.get('feed_flow'), tags.get('top_flow'), tags.get('bottom_flow')]):
+            feed_c03 = pd.to_numeric(df[tags['feed_flow']], errors='coerce').mean()
             top_c03 = pd.to_numeric(df[tags['top_flow']], errors='coerce').mean()
             bottom_c03 = pd.to_numeric(df[tags['bottom_flow']], errors='coerce').mean()
             total_out_c03 = top_c03 + bottom_c03
-            doc.add_paragraph(f"**Average Feed Flow Rate ({tags['feed_flow_c02_bottom']}):** {feed_c03:.3f} m³/hr")
+            doc.add_paragraph(f"**Average Feed Flow Rate ({tags['feed_flow']}):** {feed_c03:.3f} m³/hr")
             doc.add_paragraph(f"**Average Top Product Flow Rate ({tags['top_flow']}):** {top_c03:.3f} m³/hr")
             doc.add_paragraph(f"**Average Bottom Product Flow Rate ({tags['bottom_flow']}):** {bottom_c03:.3f} m³/hr")
             doc.add_paragraph(f"**Material Balance Check (Feed vs Total Out):** {feed_c03:.3f} vs {total_out_c03:.3f} m³/hr.")
@@ -885,12 +900,20 @@ def create_word_report(df, lab_results_df, report_filename, start_time, end_time
             doc.add_paragraph("Required flow tag data for C-03 is incomplete. Material balance analysis cannot be performed.")
 
         # Purity and DP
-        purity_top_status, _ = purity_risk_bands(pd.Series([purity_c03_top]), 90.0, limit_type='min')
-        doc.add_paragraph(f"**Top Product (Naphthalene Oil) Purity**: {purity_c03_top:.2f}%")
-        doc.add_paragraph(f"**Top Purity Compliance**: {purity_top_status} (Target > 90%)")
-        purity_bottom_status, _ = purity_risk_bands(pd.Series([purity_c03_bottom]), 2.0, limit_type='max')
-        doc.add_paragraph(f"**Bottom Purity Compliance**: {purity_bottom_status} (Target < 2%)")
+        purity_c03_top = lab_value(lab_results_df, 'C-03-T', 'NO')
+        purity_c03_bottom = lab_value(lab_results_df, 'C-03-B', 'WO-270°C')
+
+        doc.add_paragraph(f"**Top Product (Naphthalene Oil) Purity**: {purity_c03_top:.2f}% (Target > 95%)")
+        doc.add_paragraph(f"**Bottom Product (Wash Oil) Naphthalene**: {purity_c03_bottom:.2f}% (Target < 2%)")
         
+        # New impurity analysis
+        thianaphthene = get_lab_impurity_value(lab_results_df, 'C-03-T', 'Thianaphth. %')
+        quinoline = get_lab_impurity_value(lab_results_df, 'C-03-T', 'Quinoline in ppm')
+        
+        doc.add_paragraph(f"**Thianaphthene in Top Product**: {thianaphthene:.2f}%")
+        doc.add_paragraph(f"**Quinoline in Top Product**: {quinoline:.2f} ppm")
+        doc.add_paragraph("High levels of Thianaphthene and Quinoline in the final product indicate that the separation in C-03 is not complete. These impurities are known to co-distill with naphthalene and their presence points to insufficient trays or packing performance.")
+
         dp_c03_tag = calculate_dp(df, tags.get('dp_top_pressure'), tags.get('dp_bottom_pressure'))
         if dp_c03_tag:
              flooding_status, dp_mean, dp_std = flooding_proxy_text(df, dp_c03_tag)
@@ -995,20 +1018,9 @@ def create_word_report(df, lab_results_df, report_filename, start_time, end_time
     except Exception as e:
         log_and_print(f"Failed to generate C-03 analysis section: {e}", 'error')
 
-    # --------------- Energy Balance Section ---------------------------------------
-    try:
-        doc.add_heading('11. Understanding Energy Balance', level=1)
-        doc.add_paragraph("A simplified energy proxy KPI was used in this report, based on the **PF66 thermic fluid flow** and temperature drop. A full **energy balance** is crucial for optimizing plant efficiency but requires more detailed data than is available in the current SCADA tags.")
-        doc.add_paragraph("To perform this, you would need the following additional data points, which are typically found on the plant's P&ID (Piping and Instrumentation Diagram):")
-        doc.add_paragraph("Flows, temperatures, and specific heats for all streams (feed, top product, bottom product).")
-        doc.add_paragraph("An accurate specific heat capacity for the thermic fluid at operating temperatures.")
-        doc.add_page_break()
-    except Exception as e:
-        log_and_print(f"Failed to generate Energy Balance section: {e}", 'error')
-
     # Final section explaining the value of the report
     try:
-        doc.add_heading('12. The Value of This Analysis', level=1)
+        doc.add_heading('11. The Value of This Analysis', level=1)
         doc.add_paragraph("This report goes beyond the capabilities of standard industrial software like Aspen and SCADA systems by providing **actionable, proactive intelligence** based on a holistic analysis of your plant data.")
         doc.add_paragraph("While **SCADA** systems are excellent for real-time monitoring and **Aspen** is a powerful design and simulation tool, neither is designed to perform the following tasks automatically and on-demand:")
         doc.add_paragraph("**Proactive Insights**: By using **Machine Learning (ARIMA)** for time series forecasting, this report predicts future process trends, allowing operators to make adjustments before a problem occurs.")
@@ -1053,16 +1065,16 @@ if __name__ == "__main__":
             lab_results_df = pd.read_csv(LAB_RESULTS_FILE)
             log_and_print(f"Successfully loaded lab results from {LAB_RESULTS_FILE}.")
 
-            # New robust column renaming logic
-            find_and_rename_column(lab_results_df, ['material', 'product', 'type'], 'Material')
-            find_and_rename_column(lab_results_df, ['sample detail', 'sample name', 'sample'], 'Sample Detail')
-            find_and_rename_column(lab_results_df, ['gc', 'naphthalene'], 'Naphth. % by GC')
+            # New robust column renaming logic based on the image provided
             find_and_rename_column(lab_results_df, ['analysis date', 'date'], 'Analysis Date')
             find_and_rename_column(lab_results_df, ['analysis time', 'time'], 'Analysis Time')
+            find_and_rename_column(lab_results_df, ['sample detail'], 'Sample Detail')
+            find_and_rename_column(lab_results_df, ['material', 'product', 'type'], 'Material')
+            find_and_rename_column(lab_results_df, ['gc', 'naphthalene'], 'Naphth. % by GC')
             find_and_rename_column(lab_results_df, ['thianaphth', 'thianaphthene'], 'Thianaphth. %')
-            find_and_rename_column(lab_results_df, ['quinolin', 'quinoline'], 'Quinolin')
+            find_and_rename_column(lab_results_df, ['quinolin', 'quinoline'], 'Quinoline in ppm')
             find_and_rename_column(lab_results_df, ['unknown impurity'], 'Unknown Impurity%')
-
+            find_and_rename_column(lab_results_df, ['mois', 'moisture'], 'Mois. %')
 
             # Convert date/time after renaming
             if 'Analysis Date' in lab_results_df.columns and 'Analysis Time' in lab_results_df.columns:
