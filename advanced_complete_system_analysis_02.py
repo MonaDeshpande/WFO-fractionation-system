@@ -49,7 +49,7 @@ from openpyxl.utils.dataframe import dataframe_to_rows
 # Set up logging and the utility function at the top of the file
 LOG_FILE = "analysis_log.txt"
 logging.basicConfig(filename=LOG_FILE, level=logging.INFO,
-                    format='%(asctime)ss - %(levelname)s - %(message)s')
+                    format='%(asctime)s - %(levelname)s - %(message)s')
 
 def log_and_print(message, level='info'):
     """Logs a message to a file and prints it to the console."""
@@ -123,7 +123,7 @@ COLUMN_ANALYSIS = {
             'reflux_flow': 'FI-09',
             'top_flow': 'FI-03',
             'bottom_flow': 'FI-06',
-            'feed_flow': 'FI-02',
+            'feed_flow': 'FI-02',  # This tag is explicitly set based on user feedback
             'feed_temp': 'TI-11',
             'packing_temps': ['TI-13','TI-14','TI-15','TI-16','TI-17','TI-18','TI-19','TI-20','TI-21','TI-22','TI-23','TI-24','TI-25'],
             'dp_top_pressure': 'PTT-02',
@@ -366,24 +366,6 @@ def ensure_datetime(df):
         df['datetime'] = pd.to_datetime(df['DateAndTime'])
     return df
 
-def find_and_rename_column(df, search_terms, new_name):
-    """
-    Finds a column in a DataFrame that contains any of the search terms
-    and renames it to the specified new_name.
-    """
-    found_col = None
-    for col in df.columns:
-        if any(term.lower() in col.lower() for term in search_terms):
-            found_col = col
-            break
-    if found_col:
-        df.rename(columns={found_col: new_name}, inplace=True)
-        log_and_print(f"Renamed column '{found_col}' to '{new_name}'.")
-        return True
-    else:
-        log_and_print(f"Could not find a column to rename to '{new_name}' using search terms: {search_terms}", 'warning')
-        return False
-
 # --------------- MODIFIED ADVANCED ANALYSIS FUNCTIONS -------------------------
 
 def clean_data_for_plot(series, is_temperature=False):
@@ -620,10 +602,10 @@ def analyze_c03_performance(df, lab_df, purity_tag='C-03-T'):
         # Create the analysis DataFrame with all relevant parameters
         analysis_df = pd.DataFrame({
             'Purity_C03_Top': df_temp['Purity'],
-            'Reboiler_Temp': pd.to_numeric(df_temp[tags['reboiler_temp_in']], errors='coerce'),
-            'Reflux_Ratio': pd.to_numeric(df_temp[tags['reflux_flow']], errors='coerce') / pd.to_numeric(df_temp[tags['top_flow']], errors='coerce').replace(0, np.nan),
+            'Reboiler_Temp': pd.to_numeric(df_temp[tags.get('reboiler_temp_in')], errors='coerce'),
+            'Reflux_Ratio': pd.to_numeric(df_temp[tags.get('reflux_flow')], errors='coerce') / pd.to_numeric(df_temp[tags.get('top_flow')], errors='coerce').replace(0, np.nan),
             'Differential_Pressure': pd.to_numeric(df_temp[dp_c03_tag], errors='coerce') if dp_c03_tag else np.nan,
-            'Column_Pressure': pd.to_numeric(df_temp[tags['pressure']], errors='coerce')
+            'Column_Pressure': pd.to_numeric(df_temp[tags.get('pressure')], errors='coerce')
         }).dropna()
 
         if analysis_df.shape[0] < 10:
@@ -1002,18 +984,26 @@ if __name__ == "__main__":
             lab_results_df = pd.read_csv(LAB_RESULTS_FILE)
             log_and_print(f"Successfully loaded lab results from {LAB_RESULTS_FILE}.")
             
-            # --- CORRECTED COLUMN RENAMING ---
-            # Now using a flexible find-and-rename approach to handle minor spelling differences
-            # This is the most crucial fix.
-            find_and_rename_column(lab_results_df, ['analysis date'], 'Analysis Date')
-            find_and_rename_column(lab_results_df, ['analysis time'], 'Analysis Time')
-            find_and_rename_column(lab_results_df, ['naphth', '% by gc'], 'Naphth. % by GC')
-            find_and_rename_column(lab_results_df, ['thianaphth', '%'], 'Thianaphth. %')
-            find_and_rename_column(lab_results_df, ['quinoline', 'ppm'], 'Quinoline in ppm')
-            find_and_rename_column(lab_results_df, ['unknown impurity', '%'], 'Unknown Impurity%')
-            find_and_rename_column(lab_results_df, ['mois', '%'], 'Mois. %')
-            find_and_rename_column(lab_results_df, ['sample detail'], 'Sample Detail')
-            find_and_rename_column(lab_results_df, ['material'], 'Material')
+            # --- NEW, ROBUST COLUMN RENAMING ---
+            LAB_COLUMN_MAP = {
+                'ANALYSIS DATE': 'Analysis Date',
+                'ANALYSIS TIME': 'Analysis Time',
+                'SAMPLE DETAIL': 'Sample Detail',
+                'MATERIAL': 'Material',
+                'NAPH.% by GC': 'Naphth. % by GC',
+                'Thianaphth.%': 'Thianaphth. %',
+                'Quinoline in ppm': 'Quinoline in ppm',
+                'Unknown Impurity %': 'Unknown Impurity%',
+                'Mois. %': 'Mois. %',
+            }
+
+            # Perform the renaming based on the map
+            columns_to_rename = {old: new for old, new in LAB_COLUMN_MAP.items() if old in lab_results_df.columns}
+            if columns_to_rename:
+                lab_results_df.rename(columns=columns_to_rename, inplace=True)
+                log_and_print(f"Successfully renamed columns based on the map: {columns_to_rename}")
+            else:
+                log_and_print("Warning: No lab columns were renamed. Check the column headers in your CSV file.", 'warning')
 
             # Convert date/time after renaming
             if 'Analysis Date' in lab_results_df.columns and 'Analysis Time' in lab_results_df.columns:
