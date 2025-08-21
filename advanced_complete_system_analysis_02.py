@@ -46,6 +46,27 @@ from docx.enum.text import WD_ALIGN_PARAGRAPH
 from openpyxl import Workbook
 from openpyxl.utils.dataframe import dataframe_to_rows
 
+# Set up logging and the utility function at the top of the file
+LOG_FILE = "analysis_log.txt"
+logging.basicConfig(filename=LOG_FILE, level=logging.INFO,
+                    format='%(asctime)s - %(levelname)s - %(message)s')
+
+def log_and_print(message, level='info'):
+    """Logs a message to a file and prints it to the console."""
+    if level == 'info':
+        logging.info(message)
+        print(f"INFO: {message}")
+    elif level == 'warning':
+        logging.warning(message)
+        print(f"WARNING: {message}")
+    elif level == 'error':
+        logging.error(message)
+        print(f"ERROR: {message}")
+    else:
+        logging.info(message)
+        print(message)
+
+
 # --------------- CONFIG & SETUP (Centralized Configuration) -------------------
 
 # Output directory for reports and plots
