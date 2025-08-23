@@ -987,8 +987,8 @@ def create_word_report(df, lab_results_df, report_filename, start_time, end_time
     except Exception as e:
         log_and_print(f"Error saving the final report: {e}", 'error')
 
-# --------------- MAIN EXECUTION -----------------------------------------------
 
+# --------------- MAIN EXECUTION -----------------------------------------------
 if __name__ == "__main__":
     table_to_analyze = 'wide_scada_data'
     start_time_str = '2025-08-08 00:00:40'
@@ -1017,8 +1017,8 @@ if __name__ == "__main__":
             
             # --- UPDATED: New, accurate column map based on user feedback ---
             LAB_COLUMN_MAP = {
-                'Analysis Date ': 'Analysis Date', # Corrected from user input
-                'Analysis  Time': 'Analysis Time', # Corrected from user input
+                'Analysis Date ': 'Analysis Date',
+                'Analysis  Time': 'Analysis Time',
                 'Sample Detail': 'Sample Detail',
                 'Material': 'Material',
                 'Naphth. % by GC': 'Naphth. % by GC',
@@ -1038,7 +1038,17 @@ if __name__ == "__main__":
 
             # Convert date/time after renaming
             if 'Analysis Date' in lab_results_df.columns and 'Analysis Time' in lab_results_df.columns:
-                lab_results_df['datetime'] = pd.to_datetime(lab_results_df['Analysis Date'].astype(str) + ' ' + lab_results_df['Analysis Time'].astype(str), dayfirst=True, errors='coerce')
+                # --- START OF THE KEY CORRECTION ---
+                # We combine the date and time columns and explicitly tell pandas the format.
+                # The format string '%d.%m.%y %H:%M:%S' is used.
+                # If your time is not in HH:MM:SS, you'll need to adjust this.
+                lab_results_df['datetime'] = pd.to_datetime(
+                    lab_results_df['Analysis Date'].astype(str) + ' ' + lab_results_df['Analysis Time'].astype(str),
+                    format='%d.%m.%y %H:%M:%S', # <-- THIS IS THE CRITICAL CHANGE
+                    errors='coerce'
+                )
+                # --- END OF THE KEY CORRECTION ---
+                
                 lab_results_df.sort_values('datetime', ascending=False, inplace=True)
                 lab_results_df.dropna(subset=['datetime'], inplace=True)
                 log_and_print("Successfully converted 'Analysis Date' and 'Analysis Time' to a datetime column.")
