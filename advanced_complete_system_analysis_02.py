@@ -55,7 +55,7 @@ DB_PASS = 'ADMIN'
 DB_PORT = '5432'
 
 # File paths
-LAB_RESULTS_FILE = 'WFO_Plant_GC_Report-25-26.csv'
+LAB_RESULTS_FILE = 'WFO Plant GC Report-25-26.csv'
 
 # Process Limits & Constants
 ROLL_WINDOW_MIN = 120
@@ -118,9 +118,9 @@ COLUMN_ANALYSIS = {
             'dp_top_pressure': 'PTT-03',
             'dp_bottom_pressure': 'PTB-03',
             'pressure': 'PI-03',
-            'reboiler_thermic_fluid_flow': 'FI-TF-03',
-            'reboiler_temp_in': 'TI-TF-03-IN',
-            'reboiler_temp_out': 'TI-TF-03-OUT',
+            'reboiler_thermic_fluid_flow': 'FI-203',
+            'reboiler_temp_in': 'TI-216',
+            'reboiler_temp_out': 'TI-215',
         },
         'spec_top': {'sample':'C-03-T','product':'Naphthalene','min_pct':90.0},
         'spec_bottom': {'sample':'C-03-B','product':'Naphthalene','max_pct':2.0}
@@ -217,6 +217,55 @@ def get_lab_impurity_value(lab_df, sample_detail, impurity_column, default=np.na
         log_and_print(f"Warning: Could not get impurity value for {sample_detail}. Error: {e}", 'warning')
         return default
 
+def calculate_naphthalene_after_moisture_removal(lab_df, df_scada, lab_sample, lab_naphthalene_col, lab_moisture_col, moisture_flow_tag, feed_flow_tag):
+    """
+    Calculates the naphthalene percentage in the feed after C-00, by accounting for moisture removal.
+    This logic follows your instruction to use the latest lab result and the process flow data.
+    """
+    try:
+        if lab_df.empty or df_scada.empty:
+            return np.nan
+        
+        # Get the latest lab result for the feed
+        latest_lab_result = lab_df[lab_df['Sample Detail'] == lab_sample].sort_values('datetime', ascending=False).iloc[0]
+        
+        initial_naph_pct = latest_lab_result[lab_naphthalene_col]
+        initial_moisture_pct = latest_lab_result[lab_moisture_col]
+
+        # Use the closest SCADA data point for the feed and moisture flow
+        lab_time = latest_lab_result['datetime']
+        closest_scada = df_scada.iloc[df_scada['datetime'].sub(lab_time).abs().argsort()[:1]]
+
+        feed_flow_rate = pd.to_numeric(closest_scada[feed_flow_tag], errors='coerce').iloc[0]
+        moisture_removed_flow = pd.to_numeric(closest_scada[moisture_flow_tag], errors='coerce').iloc[0]
+
+        if pd.isna(feed_flow_rate) or pd.isna(moisture_removed_flow) or feed_flow_rate <= 0:
+            log_and_print("Warning: SCADA data for C-00 flows is missing or zero. Cannot calculate adjusted naphthalene percentage.", 'warning')
+            return np.nan
+        
+        # Perform the calculation based on your instructions
+        total_initial_flow = feed_flow_rate / (1 - initial_moisture_pct / 100) # This assumes initial flow rate is moisture-free
+        
+        initial_naph_mass = (initial_naph_pct / 100) * total_initial_flow
+        
+        # New total mass after removing moisture
+        new_total_flow = total_initial_flow - moisture_removed_flow
+        
+        if new_total_flow <= 0:
+            return np.nan
+
+        # Recalculate new naphthalene percentage
+        adjusted_naph_pct = (initial_naph_mass / new_total_flow) * 100
+        
+        return float(adjusted_naph_pct)
+
+    except (KeyError, IndexError) as e:
+        log_and_print(f"Error in calculating adjusted naphthalene percentage. Missing key or index: {e}", 'error')
+        return np.nan
+    except Exception as e:
+        log_and_print(f"An unexpected error occurred during naphthalene percentage calculation: {e}", 'error')
+        return np.nan
+
 
 def guess_sampling_seconds(df):
     """Guesses the sampling interval of the data."""
@@ -233,7 +282,7 @@ def points_for_minutes(df, minutes, min_points=10):
     return max(min_points, pts)
 
 def calculate_dp(df, top_pressure_tag, bottom_pressure_tag):
-    """Calculates differential pressure from top and bottom pressures."""
+    """Calculates differential pressure from bottom and top pressures (PTB - PTT)."""
     if have_cols(df, [top_pressure_tag, bottom_pressure_tag]):
         df['Calculated_DP'] = pd.to_numeric(df[bottom_pressure_tag], errors='coerce') - pd.to_numeric(df[top_pressure_tag], errors='coerce')
         return 'Calculated_DP'
@@ -774,11 +823,11 @@ def create_word_report(df, lab_results_df, report_filename, start_time, end_time
         doc.add_paragraph("Required flow tag data for C-01 is incomplete. Material balance analysis cannot be performed.")
     
     purity_c01_bottom = analysis_results.get('purity_c01_bottom')
-    naphthalene_in_feed = analysis_results.get('naphthalene_in_c01_feed')
-    doc.add_paragraph(f"**Naphthalene in Feed (P-01):** {naphthalene_in_feed:.2f}%")
+    naphthalene_in_c01_feed = analysis_results.get('naphthalene_in_c01_feed')
+    doc.add_paragraph(f"**Naphthalene in Feed to C-01:** {naphthalene_in_c01_feed:.2f}%")
     doc.add_paragraph(f"**Naphthalene in Bottom Product (C-01-B):** {purity_c01_bottom:.2f}%")
-    if not np.isnan(purity_c01_bottom) and not np.isnan(naphthalene_in_feed) and naphthalene_in_feed > 0:
-        loss_percent = (purity_c01_bottom / naphthalene_in_feed) * 100
+    if not np.isnan(purity_c01_bottom) and not np.isnan(naphthalene_in_c01_feed) and naphthalene_in_c01_feed > 0:
+        loss_percent = (purity_c01_bottom / naphthalene_in_c01_feed) * 100
         doc.add_paragraph(f"**Calculated Naphthalene Loss in C-01:** {loss_percent:.2f}% of the feed naphthalene is present in the bottom product, indicating minimal loss.")
     
     dp_c01_results = analysis_results.get('dp_c01')
@@ -961,14 +1010,14 @@ if __name__ == "__main__":
             
             # --- NEW, ROBUST COLUMN RENAMING ---
             LAB_COLUMN_MAP = {
-                'ANALYSIS DATE': 'Analysis Date',
-                'ANALYSIS TIME': 'Analysis Time',
-                'SAMPLE DETAIL': 'Sample Detail',
-                'MATERIAL': 'Material',
-                'NAPH.% by GC': 'Naphth. % by GC',
+                'Analysis Date': 'Analysis Date',
+                'Analysis Time': 'Analysis Time',
+                'Sample Detail': 'Sample Detail',
+                'Material': 'Material',
+                'Naphth. % by GC': 'Naphth. % by GC',
                 'Thianaphth.%': 'Thianaphth. %',
                 'Quinoline in ppm': 'Quinoline in ppm',
-                'Unknown Impurity %': 'Unknown Impurity%',
+                'Unknown Impurity%': 'Unknown Impurity%',
                 'Mois. %': 'Mois. %',
             }
 
@@ -981,21 +1030,20 @@ if __name__ == "__main__":
                 log_and_print("Warning: No lab columns were renamed. Check the column headers in your CSV file.", 'warning')
 
             # Convert date/time after renaming
-            # --- FIX: Handle missing values as zeroes before date conversion ---
             if 'Analysis Date' in lab_results_df.columns and 'Analysis Time' in lab_results_df.columns:
-                # Replace any NaN values in these columns with a valid placeholder string or number
-                lab_results_df['Analysis Date'] = lab_results_df['Analysis Date'].fillna('01/01/1900')
-                lab_results_df['Analysis Time'] = lab_results_df['Analysis Time'].fillna('00:00:00')
+                lab_results_df['datetime'] = pd.to_datetime(lab_results_df['Analysis Date'].astype(str) + ' ' + lab_results_df['Analysis Time'].astype(str), dayfirst=True, errors='coerce')
+                lab_results_df.sort_values('datetime', ascending=False, inplace=True)
+                lab_results_df.dropna(subset=['datetime'], inplace=True)
+                log_and_print("Successfully converted 'Analysis Date' and 'Analysis Time' to a datetime column.")
+                
+                # --- NEW: Forward fill the lab data to match SCADA timestamps ---
+                if 'datetime' in lab_results_df.columns:
+                    lab_results_df.set_index('datetime', inplace=True)
+                    # Resample to match the SCADA frequency or just forward fill
+                    lab_results_df = lab_results_df.asfreq(df['datetime'].iloc[1] - df['datetime'].iloc[0], method='pad')
+                    lab_results_df.reset_index(inplace=True)
+                    log_and_print("Successfully forward-filled lab data for interpolation.")
 
-                # Convert the date/time after handling missing values
-                try:
-                    lab_results_df['datetime'] = pd.to_datetime(lab_results_df['Analysis Date'].astype(str) + ' ' + lab_results_df['Analysis Time'].astype(str), dayfirst=True, errors='coerce')
-                    lab_results_df.sort_values('datetime', ascending=False, inplace=True)
-                    # Drop rows where the conversion failed
-                    lab_results_df.dropna(subset=['datetime'], inplace=True)
-                    log_and_print("Successfully converted 'Analysis Date' and 'Analysis Time' to a datetime column.")
-                except Exception as e:
-                    log_and_print(f"Error converting date/time columns: {e}. Time-based lab data analysis may be inaccurate.", 'warning')
             else:
                 log_and_print("Warning: Could not find 'Analysis Date' or 'Analysis Time' columns. Time-based lab data analysis may be inaccurate.", 'warning')
 
@@ -1032,7 +1080,11 @@ if __name__ == "__main__":
             analysis_results['c01_material_balance'] = {
                 'feed': feed, 'top': top, 'bottom': bottom, 'total_out': top + bottom
             }
-        analysis_results['naphthalene_in_c01_feed'] = lab_value(lab_results_df, 'P-01', 'WFO')
+        
+        # --- NEW: Calculate adjusted naphthalene percentage for C-01 feed ---
+        analysis_results['naphthalene_in_c01_feed'] = calculate_naphthalene_after_moisture_removal(
+            lab_results_df, df, 'P-01', 'Naphth. % by GC', 'Mois. %', c00_tags['top_flow'], c00_tags['feed_flow']
+        )
         analysis_results['purity_c01_bottom'] = lab_value(lab_results_df, 'C-01-B', 'ATO')
         dp_c01_tag = calculate_dp(df, c01_tags.get('dp_top_pressure'), c01_tags.get('dp_bottom_pressure'))
         if dp_c01_tag:
