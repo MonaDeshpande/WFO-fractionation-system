@@ -55,11 +55,11 @@ DB_PASS = 'ADMIN'
 DB_PORT = '5432'
 
 # File paths
-LAB_RESULTS_FILE = 'WFO Plant GC Report-25-26.csv'
+LAB_RESULTS_FILE = 'WFO_Plant_GC_Report-25-26.csv'
 
 # Process Limits & Constants
 ROLL_WINDOW_MIN = 120
-CP_THERMIC_FLUID = 2.0  # kJ/kg·K (Approximate specific heat for PF66)
+CP_THERMIC_FLUID = 2.39  # kJ/kg·K (Approximate specific heat for TF66)
 
 # Column tag map (extend as needed)
 COLUMN_ANALYSIS = {
@@ -67,9 +67,9 @@ COLUMN_ANALYSIS = {
         'purpose': 'Removes moisture and light impurities from the feed.',
         'tags': {
             'feed_flow': 'FI-01',
-            'top_flow': 'FI-61',  # water distillate
-            'bottom_flow': 'FI-62',
-            'top_temp': 'TI-01',
+            'top_flow': 'FT-61',  # water distillate
+            'bottom_flow': 'FT-62',
+            'top_temp': 'TI-65',
             'dp_top_pressure': 'PTT-04',
             'dp_bottom_pressure': 'PTB-04',
             'reflux_flow': 'FI-RF-00' # Placeholder, as reflux was not specified for C-00
@@ -79,46 +79,46 @@ COLUMN_ANALYSIS = {
     'C-01': {
         'purpose': 'Produces bottom Anthracene Oil (< 2% naphthalene).',
         'tags': {
-            'reflux_flow': 'FI-08',
-            'top_flow': 'FI-02',
-            'feed_flow': 'FI-62',
-            'bottom_flow': 'FI-05',
+            'reflux_flow': 'FT-08',
+            'top_flow': 'FT-02',
+            'feed_flow': 'FT-62',
+            'bottom_flow': 'FT-05',
             'feed_temp': 'TI-02',
             'packing_temps': ['TI-03','TI-04','TI-05','TI-06'],
             'dp_top_pressure': 'PTT-01',
             'dp_bottom_pressure': 'PTB-01',
-            'pressure': 'PI-01'
+            # 'pressure': 'PI-01'
         },
         'spec': {'sample':'C-01-B','product':'Naphthalene','max_pct':2.0}
     },
     'C-02': {
         'purpose': 'Produces top Light Oil (< 15% naphthalene).',
         'tags': {
-            'reflux_flow': 'FI-09',
-            'top_flow': 'FI-03',
-            'bottom_flow': 'FI-06',
-            'feed_flow': 'FI-02',  # This tag is explicitly set based on user feedback
+            'reflux_flow': 'FT-09',
+            'top_flow': 'FT-03',
+            'bottom_flow': 'FT-06',
+            'feed_flow': 'FT-02',  # Corrected tag name
             'feed_temp': 'TI-11',
             'packing_temps': ['TI-13','TI-14','TI-15','TI-16','TI-17','TI-18','TI-19','TI-20','TI-21','TI-22','TI-23','TI-24','TI-25'],
             'dp_top_pressure': 'PTT-02',
             'dp_bottom_pressure': 'PTB-02',
-            'pressure': 'PI-02'
+            'pressure': 'PI-02' # This tag is not used in the analysis but kept for completeness
         },
         'spec': {'sample':'C-02-T','product':'Naphthalene','max_pct':15.0}
     },
     'C-03': {
         'purpose': 'Recovers naphthalene at top; bottom wash oil < 2% naphthalene.',
         'tags': {
-            'reflux_flow': 'FI-10',
-            'top_flow': 'FI-04',
-            'bottom_flow': 'FI-07',
-            'feed_flow': 'FI-06',
+            'reflux_flow': 'FT-10',  # Corrected tag name
+            'top_flow': 'FT-04',
+            'bottom_flow': 'FT-07',
+            'feed_flow': 'FT-06',
             'feed_temp': 'TI-30',
             'packing_temps': ['TI-31','TI-32','TI-33','TI-34','TI-35','TI-36','TI-37','TI-38','TI-39','TI-40'],
             'dp_top_pressure': 'PTT-03',
             'dp_bottom_pressure': 'PTB-03',
-            'pressure': 'PI-03',
-            'reboiler_thermic_fluid_flow': 'FI-203',
+            # 'pressure': 'PI-03',
+            'reboiler_thermic_fluid_flow': 'FT-203',
             'reboiler_temp_in': 'TI-216',
             'reboiler_temp_out': 'TI-215',
         },
@@ -665,13 +665,20 @@ def analyze_c02_performance(df):
         tags = COLUMN_ANALYSIS['C-02']['tags']
         dp_c02_tag = calculate_dp(df, tags.get('dp_top_pressure'), tags.get('dp_bottom_pressure'))
         
-        if not have_cols(df, [tags['feed_flow'], tags['pressure']]) or not dp_c02_tag:
+        # Changed the required tags to FT-02 and the two DP tags, as PI-02 is not always present
+        required_tags = [tags['feed_flow']]
+        if dp_c02_tag:
+            required_tags.append(dp_c02_tag)
+        else:
+            log_and_print("C-02 DP calculation failed, skipping C-02 analysis.", 'warning')
+            return None
+        
+        if not have_cols(df, required_tags):
             log_and_print("Required tags for C-02 feed rate analysis not found.", 'warning')
             return None
 
         analysis_df = pd.DataFrame({
             'Feed_Rate_kg_h': pd.to_numeric(df[tags['feed_flow']], errors='coerce'),
-            'Column_Pressure_bar': pd.to_numeric(df[tags['pressure']], errors='coerce'),
             'Differential_Pressure_bar': pd.to_numeric(df[dp_c02_tag], errors='coerce')
         }).dropna()
 
@@ -858,7 +865,7 @@ def create_word_report(df, lab_results_df, report_filename, start_time, end_time
         doc.add_paragraph(f"**Average Delta P**: {dp_c02_results['mean']:.2f}, **Std Dev**: {dp_c02_results['std']:.2f}")
 
     doc.add_page_break()
-
+    
     # ---------- C-03 Detailed Analysis ----------
     col_name = 'C-03'
     doc.add_heading(f'6. {col_name} – {COLUMN_ANALYSIS[col_name]["purpose"]}', level=1)
@@ -890,7 +897,7 @@ def create_word_report(df, lab_results_df, report_filename, start_time, end_time
     c02_analysis_df = analysis_results.get('c02_feed_pressure_df')
     if c02_analysis_df is not None:
         feed_rate_plot_png = os.path.join(OUT_DIR, "C02_Feed_Rate_vs_Pressure.png")
-        if save_scatter_plot_with_regression(c02_analysis_df, 'Feed_Rate_kg_h', 'Column_Pressure_bar', feed_rate_plot_png, "C-02 Feed Rate vs. Column Pressure", "Feed Rate (kg/h)", "Column Pressure (bar)"):
+        if 'Column_Pressure_bar' in c02_analysis_df.columns and save_scatter_plot_with_regression(c02_analysis_df, 'Feed_Rate_kg_h', 'Column_Pressure_bar', feed_rate_plot_png, "C-02 Feed Rate vs. Column Pressure", "Feed Rate (kg/h)", "Column Pressure (bar)"):
             doc.add_picture(feed_rate_plot_png, width=Inches(6))
             doc.add_paragraph("Figure 3: This plot shows the relationship between the feed rate to Column C-02 and the resulting pressure.")
         feed_dp_plot_png = os.path.join(OUT_DIR, "C02_Feed_Rate_vs_DP.png")
@@ -1008,14 +1015,14 @@ if __name__ == "__main__":
             lab_results_df = pd.read_csv(LAB_RESULTS_FILE)
             log_and_print(f"Successfully loaded lab results from {LAB_RESULTS_FILE}.")
             
-            # --- NEW, ROBUST COLUMN RENAMING ---
+            # --- UPDATED: New, accurate column map based on user feedback ---
             LAB_COLUMN_MAP = {
-                'Analysis Date': 'Analysis Date',
-                'Analysis Time': 'Analysis Time',
+                'Analysis Date ': 'Analysis Date', # Corrected from user input
+                'Analysis  Time': 'Analysis Time', # Corrected from user input
                 'Sample Detail': 'Sample Detail',
                 'Material': 'Material',
                 'Naphth. % by GC': 'Naphth. % by GC',
-                'Thianaphth.%': 'Thianaphth. %',
+                'Thianaphth. %': 'Thianaphth. %',
                 'Quinoline in ppm': 'Quinoline in ppm',
                 'Unknown Impurity%': 'Unknown Impurity%',
                 'Mois. %': 'Mois. %',
@@ -1039,7 +1046,6 @@ if __name__ == "__main__":
                 # --- NEW: Forward fill the lab data to match SCADA timestamps ---
                 if 'datetime' in lab_results_df.columns:
                     lab_results_df.set_index('datetime', inplace=True)
-                    # Resample to match the SCADA frequency or just forward fill
                     lab_results_df = lab_results_df.asfreq(df['datetime'].iloc[1] - df['datetime'].iloc[0], method='pad')
                     lab_results_df.reset_index(inplace=True)
                     log_and_print("Successfully forward-filled lab data for interpolation.")
