@@ -1,29 +1,3 @@
-# -*- coding: utf-8 -*-
-"""
-Advanced Distillation Analysis for Naphthalene Recovery Plant
-- Pulls SCADA data from PostgreSQL
-- Reads lab results CSV (WFO Plant GC Report-25-26.csv)
-- Builds a Word report with:
-  * Material balance & recovery efficiency (C-03)
-  * Energy proxy KPI (reboiler/boil-up)
-  * Packing temperature gradient health
-  * Purity compliance & risk (if lab has a timestamp series)
-  * SPC/control charts (+/-3sigma) and anomaly flags
-  * Correlation matrix of key drivers
-  * Packing temperature heatmaps over time
-  * Delta P trend & flooding tendency proxy
-  * Baseline (previous period) benchmarking
-  * Detailed C-02 feed rate analysis
-  * Wash oil analysis based on temperature
-  * Detailed ML model explanations
-  * **NEW:** C-00 moisture analysis
-  * **NEW:** Naphthalene loss tracking in C-01 and C-02
-  * **NEW:** Impurity analysis for C-03 product
-- Exports KPI table to Excel
-
-Requirements: psycopg2, pandas, numpy, matplotlib, python-docx, openpyxl (for Excel)
-"""
-
 import os
 import math
 import logging
@@ -81,7 +55,7 @@ DB_PASS = 'ADMIN'
 DB_PORT = '5432'
 
 # File paths
-LAB_RESULTS_FILE = 'WFO Plant GC Report-25-26.csv'
+LAB_RESULTS_FILE = 'WFO_Plant_GC_Report-25-26.csv'
 
 # Process Limits & Constants
 ROLL_WINDOW_MIN = 120
@@ -232,7 +206,8 @@ def get_lab_impurity_value(lab_df, sample_detail, impurity_column, default=np.na
     try:
         m = lab_df[lab_df['Sample Detail'] == sample_detail]
         if not m.empty:
-            return float(m[impurity_column].iloc[0])
+            # Added fillna(0) to treat missing values as zero
+            return float(m[impurity_column].iloc[0]) if not pd.isna(m[impurity_column].iloc[0]) else 0.0
         else:
             return default
     except KeyError:
@@ -1006,11 +981,23 @@ if __name__ == "__main__":
                 log_and_print("Warning: No lab columns were renamed. Check the column headers in your CSV file.", 'warning')
 
             # Convert date/time after renaming
+            # --- FIX: Handle missing values as zeroes before date conversion ---
             if 'Analysis Date' in lab_results_df.columns and 'Analysis Time' in lab_results_df.columns:
-                 lab_results_df['datetime'] = pd.to_datetime(lab_results_df['Analysis Date'].astype(str) + ' ' + lab_results_df['Analysis Time'].astype(str), dayfirst=True)
-                 lab_results_df.sort_values('datetime', ascending=False, inplace=True)
+                # Replace any NaN values in these columns with a valid placeholder string or number
+                lab_results_df['Analysis Date'] = lab_results_df['Analysis Date'].fillna('01/01/1900')
+                lab_results_df['Analysis Time'] = lab_results_df['Analysis Time'].fillna('00:00:00')
+
+                # Convert the date/time after handling missing values
+                try:
+                    lab_results_df['datetime'] = pd.to_datetime(lab_results_df['Analysis Date'].astype(str) + ' ' + lab_results_df['Analysis Time'].astype(str), dayfirst=True, errors='coerce')
+                    lab_results_df.sort_values('datetime', ascending=False, inplace=True)
+                    # Drop rows where the conversion failed
+                    lab_results_df.dropna(subset=['datetime'], inplace=True)
+                    log_and_print("Successfully converted 'Analysis Date' and 'Analysis Time' to a datetime column.")
+                except Exception as e:
+                    log_and_print(f"Error converting date/time columns: {e}. Time-based lab data analysis may be inaccurate.", 'warning')
             else:
-                 log_and_print("Warning: Could not find 'Analysis Date' or 'Analysis Time' columns. Time-based lab data analysis may be inaccurate.", 'warning')
+                log_and_print("Warning: Could not find 'Analysis Date' or 'Analysis Time' columns. Time-based lab data analysis may be inaccurate.", 'warning')
 
         except FileNotFoundError:
             log_and_print(f"Error: {LAB_RESULTS_FILE} not found. Purity analysis will be skipped.", 'error')
