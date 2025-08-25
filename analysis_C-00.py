@@ -1,241 +1,271 @@
-# Import necessary libraries
 import pandas as pd
-import psycopg2
 from sqlalchemy import create_engine
+import psycopg2
 from datetime import datetime
 import matplotlib.pyplot as plt
-import seaborn as sns
+import os
 import numpy as np
-import os # For checking if files exist
+from docx import Document
+from docx.shared import Inches
+import sqlalchemy
 
-# --- Reusable Configuration ---
-# Database connection details
-DB_CONFIG = {
-    'host': 'localhost',
-    'name': 'scada_data_analysis',
-    'user': 'postgres',
-    'pass': 'ADMIN',
-    'port': '5432'
-}
-DATABASE_URL = f"postgresql://{DB_CONFIG['user']}:{DB_CONFIG['pass']}@{DB_CONFIG['host']}:{DB_CONFIG['port']}/{DB_CONFIG['name']}"
+# Database connection parameters (update with your actual details)
+DB_HOST = "localhost"
+DB_NAME = "scada_data_analysis"
+DB_USER = "postgres"
+DB_PASSWORD = "ADMIN"
 
-# Time range for analysis
-START_TIME = '2025-08-08 00:00:40'
-END_TIME = '2025-08-20 12:40:59'
+# File paths
+output_report_path = "C-00_Analysis_Report.docx"
+output_temp_plot_path = "C-00_Temperature_Profile.png"
+output_dp_plot_path = "C-00_Differential_Pressure.png"
+output_energy_plot_path = "C-00_Energy_Balance.png"
+output_trends_plot_path = "C-00_Daily_Trends.png"
 
-# SCADA data table name and GC file path
-SCADA_TABLE = 'wide_scada_data'
-GC_FILE = 'WFO_Plant_GC_Report-25-26.csv'
+# Engineering constants
+THERMIC_FLUID_SPECIFIC_HEAT = 2.0  # kJ/(kg·°C)
+WATER_SPECIFIC_HEAT = 4.186       # kJ/(kg·°C)
 
-# Instrument tags for Column C-00
-C00_TAGS = {
-    'feed_flow': 'FT-01',
-    'top_flow': 'FT-61',
-    'bottom_flow': 'FT-62',
-    'feed_temp': 'TI-01',
-    'top_temp': 'TI-65',
-    'dp_top_pressure': 'PTT-04',
-    'dp_bottom_pressure': 'PTB-04',
-    'reboiler_in_temp': 'TI-215',
-    'reboiler_out_temp': 'TI-216',
-    'column_temp_profile': ['TI-61', 'TI-62', 'TI-63', 'TI-64', 'TI-65']
-}
-
-# --- Data Retrieval and Processing Functions ---
-
-def get_scada_data(table_name, start_time, end_time):
-    """Retrieves high-frequency SCADA data from the database."""
-    print("Connecting to database and retrieving SCADA data...")
+def connect_to_database():
+    """Establishes a connection to the PostgreSQL database."""
     try:
-        engine = create_engine(DATABASE_URL)
-        query = f"SELECT * FROM {table_name} WHERE timestamp BETWEEN '{start_time}' AND '{end_time}' ORDER BY timestamp;"
+        engine = create_engine(f'postgresql+psycopg2://{DB_USER}:{DB_PASSWORD}@{DB_HOST}/{DB_NAME}')
+        print("Database connection successful.")
+        return engine
+    except Exception as e:
+        print(f"Error connecting to the database: {e}")
+        return None
+
+def get_scada_data(engine):
+    """Retrieves specific SCADA data for the C-00 column."""
+    try:
+        desired_columns = [
+            "DateAndTime", "FT-01", "FT-61", "FT-62", "TI-01", "PTT-04", "PTB-04", 
+            "TI-215", "TI-216", "TI-110", "TI-61", "TI-63", "TI-64", "FI-101", "FI-204"
+        ]
+        
+        inspector = sqlalchemy.inspect(engine)
+        columns = inspector.get_columns('wide_scada_data')
+        column_names = [col['name'] for col in columns]
+        
+        final_columns = []
+        for d_col in desired_columns:
+            for db_col in column_names:
+                if d_col.lower() == db_col.lower():
+                    final_columns.append(f'"{db_col}"')
+                    break
+        
+        if not final_columns:
+            print("Error: No matching columns found. Data retrieval failed.")
+            return None
+
+        select_clause = ", ".join(final_columns)
+        query = f"""
+        SELECT {select_clause}
+        FROM wide_scada_data
+        WHERE "DateAndTime" BETWEEN '2025-08-08 00:40:00' AND '2025-08-20 12:40:59'
+        ORDER BY "DateAndTime";
+        """
+        
         df = pd.read_sql(query, engine)
-        df['timestamp'] = pd.to_datetime(df['timestamp'])
-        df.set_index('timestamp', inplace=True)
-        print("SCADA data retrieved successfully.")
+        df.columns = [col.upper() for col in df.columns]
+        df['DATEANDTIME'] = pd.to_datetime(df['DATEANDTIME'])
+        print("SCADA data for C-00 retrieved successfully.")
         return df
     except Exception as e:
-        print(f"Error connecting to the database or retrieving data: {e}")
+        print(f"Error retrieving SCADA data: {e}")
         return None
 
-def get_gc_data(file_path):
-    """
-    Reads and processes the GC report, filtering for C-00 feed samples.
-    Creates dummy data if the file is not found for demonstration.
-    """
-    print(f"Reading and processing GC report data from {file_path}...")
-    try:
-        if not os.path.exists(file_path):
-            print(f"File not found: {file_path}. Generating dummy GC data for demonstration.")
-            dummy_gc = {'Analysis Date': ['07.08.25', '07.08.25', '08.08.25', '08.08.25'],
-                        'Analysis Time': ['09.15AM', '06.00PM', '06.00AM', '09.30AM'],
-                        'Sample Detail': ['P-01', 'P-01', 'C-03-T', 'P-01'],
-                        'Mois. %': [0.2, 0.2, 0.7, 0.2],
-                        'Naphth. % by GC': [56.53, 55.52, 88.94, 56.38],
-                        'Thianaphth. %': [2.04, 2.02, 4.22, 2.03],
-                        'Quinoline in ppm': [17459, 17442, 6582, 18189],
-                        'Unknown Impurity%': [1.83, 1.84, 1.7, 1.9]}
-            gc_df = pd.DataFrame(dummy_gc)
-        else:
-            gc_df = pd.read_csv(file_path)
-
-        gc_df['DateTime'] = pd.to_datetime(gc_df['Analysis Date'] + ' ' + gc_df['Analysis Time'], format='%d.%m.%y %I.%M%p')
-        feed_gc_data = gc_df[gc_df['Sample Detail'] == 'P-01'].copy()
-        feed_gc_data.set_index('DateTime', inplace=True)
-        
-        feed_gc_data.rename(columns={
-            'Naphth. % by GC': 'Naphthalene_pct',
-            'Thianaphth. %': 'Thianaphthalene_pct',
-            'Quinoline in ppm': 'Quinoline_ppm',
-            'Mois. %': 'Moisture_pct', # Assuming this is water %
-            'Unknown Impurity%': 'Unknown_Impurity_pct'
-        }, inplace=True)
-        print("GC data processed successfully.")
-        return feed_gc_data[['Moisture_pct', 'Naphthalene_pct', 'Thianaphthalene_pct', 'Quinoline_ppm', 'Unknown_Impurity_pct']]
-    except Exception as e:
-        print(f"Error reading or processing the CSV file: {e}")
-        return None
-
-def integrate_data(scada_df, gc_df):
-    """
-    Merges SCADA and GC data using a backward-fill method. This aligns the
-    constant drum composition with the high-frequency process data.
-    """
-    if scada_df is None or gc_df is None:
-        print("Data integration failed due to missing dataframes.")
-        return None
-    print("Integrating high-resolution SCADA and GC data...")
-    
-    integrated_df = pd.merge_asof(
-        scada_df.sort_index(), 
-        gc_df.sort_index(), 
-        left_index=True, 
-        right_index=True, 
-        direction='backward'
-    )
-    integrated_df.ffill(inplace=True) 
-    print("Data integration complete.")
-    return integrated_df
-
-# --- Analysis and Plotting Functions ---
-
-def perform_c00_analysis(df):
-    """
-    Performs the core analysis for the C-00 column: material balance,
-    efficiency, and differential pressure.
-    """
+def perform_analysis(df):
+    """Calculates key performance indicators for the C-00 column."""
     if df is None or df.empty:
-        print("Cannot perform analysis, input DataFrame is empty.")
-        return None
+        return {}
 
-    print("Starting C-00 column analysis...")
+    analysis_results = {}
     
-    df['material_balance_deviation'] = df[C00_TAGS['feed_flow']] - (df[C00_TAGS['top_flow']] + df[C00_TAGS['bottom_flow']])
+    # Material Balance Analysis
+    if 'FT-01' in df.columns and 'FT-61' in df.columns:
+        feed_flow_avg = df['FT-01'].mean()
+        top_product_flow_avg = df['FT-61'].mean()
+        
+        analysis_results['Average Feed Flow (FT-01)'] = feed_flow_avg
+        analysis_results['Average Top Product Flow (FT-61)'] = top_product_flow_avg
+        
+        moisture_in_feed_flow = feed_flow_avg * 0.002
+        moisture_removed = moisture_in_feed_flow - (top_product_flow_avg * 0.002)
+        
+        if moisture_in_feed_flow > 0:
+            moisture_removal_percent = (moisture_removed / moisture_in_feed_flow) * 100
+            analysis_results['Moisture Removal Percentage'] = moisture_removal_percent
+        else:
+            analysis_results['Moisture Removal Percentage'] = "N/A (Zero Feed Flow)"
+    
+    # Differential Pressure (DP) Calculation
+    if 'PTT-04' in df.columns and 'PTB-04' in df.columns:
+        df['DIFFERENTIAL_PRESSURE'] = df['PTB-04'] - df['PTT-04']
+        analysis_results['Average Differential Pressure'] = df['DIFFERENTIAL_PRESSURE'].mean()
+        analysis_results['Maximum Differential Pressure'] = df['DIFFERENTIAL_PRESSURE'].max()
+        
+    # Energy Balance
+    if all(tag in df.columns for tag in ['TI-215', 'TI-216', 'TI-110', 'FI-101']):
+        if 'FI-204' in df.columns:
+            df['REBOILER_HEAT_DUTY'] = df['FI-204'] * THERMIC_FLUID_SPECIFIC_HEAT * (df['TI-216'] - df['TI-215'])
+            analysis_results['Average Reboiler Heat Duty'] = df['REBOILER_HEAT_DUTY'].mean()
 
-    df['water_in_feed'] = df[C00_TAGS['feed_flow']] * (df['Moisture_pct'] / 100)
-    df['water_removed'] = df[C00_TAGS['top_flow']]
-    df['Efficiency'] = (df['water_removed'] / df['water_in_feed']) * 100
-    df['Efficiency'] = df['Efficiency'].clip(upper=100)
+        if 'FI-101' in df.columns:
+            df['CONDENSER_HEAT_DUTY'] = df['FI-101'] * WATER_SPECIFIC_HEAT * (25 - df['TI-110'])
+            analysis_results['Average Condenser Heat Duty'] = df['CONDENSER_HEAT_DUTY'].mean()
 
-    df['differential_pressure'] = df[C00_TAGS['dp_bottom_pressure']] - df[C00_TAGS['dp_top_pressure']]
-
-    print("Analysis complete.")
-    return df
+    # Stability Analysis
+    analysis_results['Stability'] = {}
+    if 'TI-64' in df.columns:
+        mean_ti64 = df['TI-64'].mean()
+        std_ti64 = df['TI-64'].std()
+        cv_ti64 = (std_ti64 / mean_ti64) * 100 if mean_ti64 != 0 else 0
+        analysis_results['Stability']['TI-64 (Top Temp) Standard Deviation'] = std_ti64
+        analysis_results['Stability']['TI-64 (Top Temp) Coefficient of Variation (%)'] = cv_ti64
+    
+    if 'DIFFERENTIAL_PRESSURE' in df.columns:
+        mean_dp = df['DIFFERENTIAL_PRESSURE'].mean()
+        std_dp = df['DIFFERENTIAL_PRESSURE'].std()
+        cv_dp = (std_dp / mean_dp) * 100 if mean_dp != 0 else 0
+        analysis_results['Stability']['Differential Pressure Standard Deviation'] = std_dp
+        analysis_results['Stability']['Differential Pressure Coefficient of Variation (%)'] = cv_dp
+        
+    return analysis_results, df
 
 def generate_plots(df):
-    """Generates and saves plots for the analysis."""
-    if df is None or df.empty:
-        print("Cannot generate plots, DataFrame is empty.")
+    """Generates and saves temperature profile, DP, and energy plots."""
+    # Temperature Profile Plot
+    try:
+        plt.figure(figsize=(10, 6))
+        
+        if 'DATEANDTIME' in df.columns:
+            df.sort_values(by='DATEANDTIME', inplace=True)
+            x_axis = df['DATEANDTIME']
+            
+            if 'TI-61' in df.columns: plt.plot(x_axis, df['TI-61'], label='TI-61', alpha=0.7)
+            if 'TI-63' in df.columns: plt.plot(x_axis, df['TI-63'], label='TI-63', alpha=0.7)
+            if 'TI-64' in df.columns: plt.plot(x_axis, df['TI-64'], label='TI-64', alpha=0.7)
+
+            plt.title("C-00 Column Temperature Profile Over Time")
+            plt.xlabel("Date and Time")
+            plt.ylabel("Temperature (°C)")
+            plt.legend()
+            plt.grid(True)
+            plt.tight_layout()
+            plt.savefig(output_temp_plot_path)
+            plt.close()
+            print(f"Temperature profile plot saved to {output_temp_plot_path}")
+            
+    except Exception as e:
+        print(f"Error generating temperature plot: {e}")
+        
+    # Differential Pressure Plot
+    try:
+        if 'DIFFERENTIAL_PRESSURE' in df.columns:
+            plt.figure(figsize=(10, 6))
+            plt.plot(df['DATEANDTIME'], df['DIFFERENTIAL_PRESSURE'], color='purple', alpha=0.8)
+            plt.title("C-00 Differential Pressure Over Time")
+            plt.xlabel("Date and Time")
+            plt.ylabel("Differential Pressure")
+            plt.grid(True)
+            plt.tight_layout()
+            plt.savefig(output_dp_plot_path)
+            plt.close()
+            print(f"Differential pressure plot saved to {output_dp_plot_path}")
+    except Exception as e:
+        print(f"Error generating DP plot: {e}")
+
+    # Daily Trends Plot
+    try:
+        df['DATE'] = df['DATEANDTIME'].dt.date
+        daily_trends = df.groupby('DATE').agg({
+            'FT-01': 'mean',
+            'TI-64': 'mean',
+            'DIFFERENTIAL_PRESSURE': 'mean'
+        }).reset_index()
+
+        plt.figure(figsize=(12, 8))
+        plt.plot(daily_trends['DATE'], daily_trends['FT-01'], label='Avg Feed Flow (FT-01)')
+        plt.plot(daily_trends['DATE'], daily_trends['TI-64'], label='Avg Top Temp (TI-64)')
+        plt.plot(daily_trends['DATE'], daily_trends['DIFFERENTIAL_PRESSURE'], label='Avg DP')
+        plt.title("C-00 Daily Trends")
+        plt.xlabel("Date")
+        plt.ylabel("Value")
+        plt.legend()
+        plt.grid(True)
+        plt.tight_layout()
+        plt.savefig(output_trends_plot_path)
+        plt.close()
+        print(f"Daily trends plot saved to {output_trends_plot_path}")
+    except Exception as e:
+        print(f"Error generating daily trends plot: {e}")
+        
+def generate_word_report(analysis_results, df):
+    """Creates a detailed analysis report in a Word document."""
+    doc = Document()
+    doc.add_heading('C-00 Packed Distillation Column Analysis Report', 0)
+    doc.add_paragraph(f"Report Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+
+    # Section 1: Data Summary
+    doc.add_heading('1. Data Summary', level=1)
+    doc.add_paragraph(f"Number of data points analyzed: {len(df)}")
+    doc.add_paragraph(f"Time Period: {df['DATEANDTIME'].min().strftime('%Y-%m-%d %H:%M:%S')} to {df['DATEANDTIME'].max().strftime('%Y-%m-%d %H:%M:%S')}")
+
+    # Section 2: Key Performance Indicators
+    doc.add_heading('2. Key Performance Indicators (KPIs)', level=1)
+    for key, value in analysis_results.items():
+        if isinstance(value, dict):
+            continue
+        doc.add_paragraph(f"• {key}: {value:.2f}")
+
+    # Section 3: Column Stability Analysis
+    doc.add_heading('3. Column Stability Analysis', level=1)
+    doc.add_paragraph("This section analyzes the stability of key process variables to identify operational consistency.")
+    if 'Stability' in analysis_results:
+        for key, value in analysis_results['Stability'].items():
+            doc.add_paragraph(f"• {key}: {value:.2f}")
+
+    # Section 4: Performance Plots
+    doc.add_heading('4. Performance Plots', level=1)
+    
+    # Temperature Profile
+    doc.add_heading('4.1 Temperature Profile', level=2)
+    doc.add_paragraph("The temperature profile plot shows the gradient across the column. A consistent gradient indicates stable operation.")
+    doc.add_picture(output_temp_plot_path, width=Inches(6))
+
+    # Differential Pressure
+    doc.add_heading('4.2 Differential Pressure (DP)', level=2)
+    doc.add_paragraph("Differential pressure is a key indicator of flooding, foaming, or fouling inside the column.")
+    doc.add_picture(output_dp_plot_path, width=Inches(6))
+
+    # Daily Trends
+    doc.add_heading('4.3 Daily Trends', level=2)
+    doc.add_paragraph("This plot shows the daily average trends of key variables, helping to visualize long-term shifts in performance.")
+    doc.add_picture(output_trends_plot_path, width=Inches(6))
+
+    doc.save(output_report_path)
+    print(f"Analysis report generated successfully at {output_report_path}")
+
+def main():
+    """Main execution function."""
+    engine = connect_to_database()
+    if engine is None:
         return
 
-    sns.set_style("whitegrid")
-    
-    # Plot 1: Flow Rates and Material Balance
-    plt.figure(figsize=(15, 6))
-    plt.plot(df.index, df[C00_TAGS['feed_flow']], label='Feed Flow (FT-01)', color='b')
-    plt.plot(df.index, df[C00_TAGS['top_flow']], label='Top Flow (FT-61)', color='g')
-    plt.plot(df.index, df[C00_TAGS['bottom_flow']], label='Bottom Flow (FT-62)', color='r')
-    plt.title('C-00 Column Material Balance Over Time')
-    plt.xlabel('Date/Time')
-    plt.ylabel('Flow Rate (kg/min)')
-    plt.legend()
-    plt.tight_layout()
-    plt.savefig('C00_material_balance.png')
-    plt.show()
+    scada_data = get_scada_data(engine)
+    if scada_data is None:
+        return
 
-    # Plot 2: Dehydration Efficiency
-    plt.figure(figsize=(15, 6))
-    plt.plot(df.index, df['Efficiency'], label='Dehydration Efficiency (%)', color='purple')
-    plt.title('C-00 Column Dehydration Efficiency Over Time')
-    plt.xlabel('Date/Time')
-    plt.ylabel('Efficiency (%)')
-    plt.ylim(0, 105)
-    plt.legend()
-    plt.tight_layout()
-    plt.savefig('C00_dehydration_efficiency.png')
-    plt.show()
-
-    # Plot 3: Differential Pressure vs. Feed Flow
-    fig, ax1 = plt.subplots(figsize=(15, 6))
-    ax1.set_title('Differential Pressure vs. Feed Flow')
-    ax1.set_xlabel('Date/Time')
-    ax1.set_ylabel('Differential Pressure (bar)', color='orange')
-    ax1.plot(df.index, df['differential_pressure'], label='Differential Pressure', color='orange')
-    ax1.tick_params(axis='y', labelcolor='orange')
+    analysis_results, scada_data = perform_analysis(scada_data)
     
-    ax2 = ax1.twinx()
-    ax2.set_ylabel('Feed Flow (kg/min)', color='blue')
-    ax2.plot(df.index, df[C00_TAGS['feed_flow']], label='Feed Flow', color='blue', linestyle='--')
-    ax2.tick_params(axis='y', labelcolor='blue')
-    fig.tight_layout()
-    plt.savefig('C00_differential_pressure.png')
-    plt.show()
-    
-    # Plot 4: Temperature Profile
-    plt.figure(figsize=(15, 6))
-    for temp_tag in C00_TAGS['column_temp_profile']:
-        plt.plot(df.index, df[temp_tag], label=temp_tag)
-    plt.title('C-00 Column Temperature Profile (Bottom to Top)')
-    plt.xlabel('Date/Time')
-    plt.ylabel('Temperature (deg C)')
-    plt.legend()
-    plt.tight_layout()
-    plt.savefig('C00_temperature_profile.png')
-    plt.show()
-
-# --- Main Execution Block ---
+    if analysis_results:
+        generate_plots(scada_data)
+        generate_word_report(analysis_results, scada_data)
+        print("C-00 analysis complete.")
+    else:
+        print("Analysis failed: no data to process.")
 
 if __name__ == "__main__":
-    scada_data = get_scada_data(SCADA_TABLE, START_TIME, END_TIME)
-    gc_data = get_gc_data(GC_FILE)
-    
-    if scada_data is not None and gc_data is not None:
-        integrated_data = integrate_data(scada_data, gc_data)
-        
-        if 'Unknown_Impurity_pct' in integrated_data.columns:
-            print("\nUnknown Impurity data has been successfully integrated.")
-        
-        analyzed_data = perform_c00_analysis(integrated_data)
-        
-        if analyzed_data is not None:
-            analyzed_data.to_csv('analyzed_c00_data.csv')
-            print("Analyzed data saved to 'analyzed_c00_data.csv'.")
-            
-            generate_plots(analyzed_data)
-
-            print("\n" + "="*50)
-            print("C-00 COLUMN ANALYSIS SUMMARY REPORT")
-            print("="*50)
-            
-            avg_efficiency = analyzed_data['Efficiency'].mean()
-            avg_feed_flow = analyzed_data[C00_TAGS['feed_flow']].mean()
-            avg_dp = analyzed_data['differential_pressure'].mean()
-            
-            print(f"1. Average Dehydration Efficiency: {avg_efficiency:.2f}%")
-            print(f"2. Average Feed Flow Rate: {avg_feed_flow:.2f} kg/min")
-            print(f"3. Average Differential Pressure: {avg_dp:.2f} bar")
-            
-            print("\nNote: The 'analyzed_c00_data.csv' file now includes the 'Unknown Impurity%' data. This is crucial for future analyses of the downstream columns and for correlating it with C-00's performance.")
-            print("="*50)
-    else:
-        print("Data preparation failed. Please check your file paths and database connection.")
+    main()
