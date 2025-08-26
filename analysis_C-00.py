@@ -1,5 +1,5 @@
 import pandas as pd
-from sqlalchemy import create_engine
+from sqlalchemy import inspect, create_engine
 import psycopg2
 from datetime import datetime
 import matplotlib.pyplot as plt
@@ -7,7 +7,6 @@ import os
 import numpy as np
 from docx import Document
 from docx.shared import Inches
-import sqlalchemy
 import re
 
 # Database connection parameters (update with your actual details)
@@ -49,7 +48,7 @@ output_flow_performance_plot_path = "C-00_Performance_vs_Flow.png"
 
 # Engineering constants
 THERMIC_FLUID_SPECIFIC_HEAT = 2.0  # kJ/(kg·°C)
-WATER_SPECIFIC_HEAT = 4.186       # kJ/(kg·°C)
+WATER_SPECIFIC_HEAT = 4.186        # kJ/(kg·°C)
 
 def connect_to_database():
     """Establishes a connection to the PostgreSQL database."""
@@ -69,7 +68,7 @@ def get_scada_data(engine, start_date='2025-08-08 00:00:00', end_date='2025-08-2
             "TI-215", "TI-216", "TI-110", "TI-61", "TI-63", "TI-64", "FI-101", "FI-204"
         ]
         
-        inspector = sqlalchemy.inspect(engine)
+        inspector = inspect(engine)
         columns = inspector.get_columns('wide_scada_data')
         column_names = [col['name'] for col in columns]
         
@@ -110,7 +109,7 @@ def get_moisture_percentage(start_date, end_date, default_moisture_percent=0.2):
         # Simulate reading moisture data from a CSV
         moisture_data = {
             'Date': pd.to_datetime(['2025-08-08', '2025-08-09', '2025-08-10', '2025-08-11', '2025-08-12', 
-                                    '2025-08-13', '2025-08-14', '2025-08-15', '2025-08-16', '2025-08-17']),
+                                     '2025-08-13', '2025-08-14', '2025-08-15', '2025-08-16', '2025-08-17']),
             'Moisture_Percent': [0.21, 0.19, 0.22, 0.20, 0.23, 0.21, 0.20, 0.22, 0.21, 0.19]
         }
         df_moisture = pd.DataFrame(moisture_data)
@@ -223,6 +222,9 @@ def perform_analysis(df, start_date, end_date):
 
 def generate_plots(df):
     """Generates and saves temperature profile, DP, daily trends, and performance plots."""
+    
+    plot_created_flags = {}
+
     # Temperature Profile Plot
     try:
         plt.figure(figsize=(10, 6))
@@ -241,12 +243,14 @@ def generate_plots(df):
             plt.savefig(output_temp_plot_path)
             plt.close()
             print(f"Temperature profile plot saved to {output_temp_plot_path}")
+            plot_created_flags['temp_profile'] = True
     except Exception as e:
         print(f"Error generating temperature plot: {e}")
+        plot_created_flags['temp_profile'] = False
         
     # Differential Pressure Plot
     try:
-        if 'DIFFERENTIAL_PRESSURE' in df.columns:
+        if 'DIFFERENTIAL_PRESSURE' in df.columns and not df['DIFFERENTIAL_PRESSURE'].isnull().all():
             plt.figure(figsize=(10, 6))
             plt.plot(df['DATEANDTIME'], df['DIFFERENTIAL_PRESSURE'], color='purple', alpha=0.8)
             plt.title("C-00 Differential Pressure Over Time")
@@ -257,32 +261,38 @@ def generate_plots(df):
             plt.savefig(output_dp_plot_path)
             plt.close()
             print(f"Differential pressure plot saved to {output_dp_plot_path}")
+            plot_created_flags['dp'] = True
     except Exception as e:
         print(f"Error generating DP plot: {e}")
+        plot_created_flags['dp'] = False
 
     # Daily Trends Plot
     try:
-        df['DATE'] = df['DATEANDTIME'].dt.date
-        daily_trends = df.groupby('DATE').agg({
-            'FT_01': 'mean',
-            'TI_64': 'mean',
-            'DIFFERENTIAL_PRESSURE': 'mean'
-        }).reset_index()
-        plt.figure(figsize=(12, 8))
-        plt.plot(daily_trends['DATE'], daily_trends['FT_01'], label=f"Avg Feed Flow ({TAG_UNITS['FT-01']})")
-        plt.plot(daily_trends['DATE'], daily_trends['TI_64'], label=f"Avg Top Temp ({TAG_UNITS['TI-64']})")
-        plt.plot(daily_trends['DATE'], daily_trends['DIFFERENTIAL_PRESSURE'], label=f"Avg DP ({TAG_UNITS['DIFFERENTIAL_PRESSURE']})")
-        plt.title("C-00 Daily Trends")
-        plt.xlabel("Date")
-        plt.ylabel("Value")
-        plt.legend()
-        plt.grid(True)
-        plt.tight_layout()
-        plt.savefig(output_trends_plot_path)
-        plt.close()
-        print(f"Daily trends plot saved to {output_trends_plot_path}")
+        if 'DATEANDTIME' in df.columns:
+            df['DATE'] = df['DATEANDTIME'].dt.date
+            daily_trends = df.groupby('DATE').agg({
+                'FT_01': 'mean',
+                'TI_64': 'mean',
+                'DIFFERENTIAL_PRESSURE': 'mean'
+            }).reset_index()
+            if not daily_trends.empty:
+                plt.figure(figsize=(12, 8))
+                plt.plot(daily_trends['DATE'], daily_trends['FT_01'], label=f"Avg Feed Flow ({TAG_UNITS['FT-01']})")
+                plt.plot(daily_trends['DATE'], daily_trends['TI_64'], label=f"Avg Top Temp ({TAG_UNITS['TI-64']})")
+                plt.plot(daily_trends['DATE'], daily_trends['DIFFERENTIAL_PRESSURE'], label=f"Avg DP ({TAG_UNITS['DIFFERENTIAL_PRESSURE']})")
+                plt.title("C-00 Daily Trends")
+                plt.xlabel("Date")
+                plt.ylabel("Value")
+                plt.legend()
+                plt.grid(True)
+                plt.tight_layout()
+                plt.savefig(output_trends_plot_path)
+                plt.close()
+                print(f"Daily trends plot saved to {output_trends_plot_path}")
+                plot_created_flags['trends'] = True
     except Exception as e:
         print(f"Error generating daily trends plot: {e}")
+        plot_created_flags['trends'] = False
         
     # Performance Plot: Moisture Removal vs. Reboiler Heat Duty
     try:
@@ -297,8 +307,10 @@ def generate_plots(df):
             plt.savefig(output_performance_plot_path)
             plt.close()
             print(f"Performance plot saved to {output_performance_plot_path}")
+            plot_created_flags['performance'] = True
     except Exception as e:
         print(f"Error generating performance plot: {e}")
+        plot_created_flags['performance'] = False
     
     # New Performance Plot: Moisture Removal vs. Feed Temperature (TI-01)
     try:
@@ -313,8 +325,10 @@ def generate_plots(df):
             plt.savefig(output_temp_performance_plot_path)
             plt.close()
             print(f"Moisture Removal vs. Feed Temperature plot saved to {output_temp_performance_plot_path}")
+            plot_created_flags['temp_performance'] = True
     except Exception as e:
         print(f"Error generating Moisture Removal vs. Feed Temperature plot: {e}")
+        plot_created_flags['temp_performance'] = False
 
     # New Performance Plot: Moisture Removal vs. Top Product Flow (FT-61)
     try:
@@ -329,10 +343,14 @@ def generate_plots(df):
             plt.savefig(output_flow_performance_plot_path)
             plt.close()
             print(f"Moisture Removal vs. Top Product Flow plot saved to {output_flow_performance_plot_path}")
+            plot_created_flags['flow_performance'] = True
     except Exception as e:
         print(f"Error generating Moisture Removal vs. Top Product Flow plot: {e}")
-        
-def generate_word_report(analysis_results, df, outliers, start_date, end_date):
+        plot_created_flags['flow_performance'] = False
+    
+    return plot_created_flags
+    
+def generate_word_report(analysis_results, df, outliers, start_date, end_date, plot_flags):
     """Creates a detailed analysis report in a Word document."""
     doc = Document()
     doc.add_heading('C-00 Packed Distillation Column Analysis Report', 0)
@@ -388,23 +406,32 @@ def generate_word_report(analysis_results, df, outliers, start_date, end_date):
         doc.add_paragraph(f"• Average Moisture Removal Efficiency: {moisture_removed_avg}")
         
     doc.add_paragraph("The plot below shows how moisture removal efficiency is correlated with the reboiler heat duty. It helps identify the optimal operating window.")
-    doc.add_picture(output_performance_plot_path, width=Inches(6))
+    if plot_flags.get('performance') and os.path.exists(output_performance_plot_path):
+        doc.add_picture(output_performance_plot_path, width=Inches(6))
+    else:
+        doc.add_paragraph("Plot not generated due to missing data.")
 
     # 3.2: Factor Correlations
     doc.add_heading('3.2 Factor Correlations', level=2)
     doc.add_paragraph("The plots below show the relationships between key performance factors.")
     
     doc.add_paragraph("The plot below shows how moisture removal efficiency is affected by the feed temperature.")
-    doc.add_picture(output_temp_performance_plot_path, width=Inches(6))
+    if plot_flags.get('temp_performance') and os.path.exists(output_temp_performance_plot_path):
+        doc.add_picture(output_temp_performance_plot_path, width=Inches(6))
+    else:
+        doc.add_paragraph("Plot not generated due to missing data.")
 
     doc.add_paragraph("The plot below shows how moisture removal efficiency is affected by the top product flow.")
-    doc.add_picture(output_flow_performance_plot_path, width=Inches(6))
+    if plot_flags.get('flow_performance') and os.path.exists(output_flow_performance_plot_path):
+        doc.add_picture(output_flow_performance_plot_path, width=Inches(6))
+    else:
+        doc.add_paragraph("Plot not generated due to missing data.")
 
     if 'Performance Factors' in analysis_results:
         for key, value in analysis_results['Performance Factors'].items():
             doc.add_paragraph(f"• {key}: {value:.2f}")
 
-    # 3.3: Composition Analysis
+    # 3.3: Composition Analysis (Note: This is a placeholder as no composition data is being passed)
     doc.add_heading('3.3 Bottom Product Composition', level=2)
     bottom_comp = analysis_results.get('Bottom Product Composition', {})
     doc.add_paragraph("The composition of the bottom product (the feed to C-01) is calculated based on the assumption that non-moisture components are not separated by this column.")
@@ -421,15 +448,24 @@ def generate_word_report(analysis_results, df, outliers, start_date, end_date):
     doc.add_paragraph("The temperature profile plot shows the gradient across the column. A consistent gradient indicates stable operation.")
     if 'TI_63' in outliers:
         doc.add_paragraph(f"**Note:** An extreme outlier was detected on {outliers['TI_63']['time']} for the TI-63 sensor, reaching a value of {outliers['TI_63']['value']:.2f} {TAG_UNITS['TI-63']}. This is likely a sensor malfunction and the value has been excluded from all calculations.")
-    doc.add_picture(output_temp_plot_path, width=Inches(6))
+    if plot_flags.get('temp_profile') and os.path.exists(output_temp_plot_path):
+        doc.add_picture(output_temp_plot_path, width=Inches(6))
+    else:
+        doc.add_paragraph("Plot not generated due to missing data.")
     
     doc.add_heading('4.2 Differential Pressure (DP)', level=2)
     doc.add_paragraph("Differential pressure is a key indicator of flooding, foaming, or fouling inside the column.")
-    doc.add_picture(output_dp_plot_path, width=Inches(6))
+    if plot_flags.get('dp') and os.path.exists(output_dp_plot_path):
+        doc.add_picture(output_dp_plot_path, width=Inches(6))
+    else:
+        doc.add_paragraph("Plot not generated due to missing data.")
 
     doc.add_heading('4.3 Daily Trends', level=2)
     doc.add_paragraph("This plot shows the daily average trends of key variables, helping to visualize long-term shifts in performance.")
-    doc.add_picture(output_trends_plot_path, width=Inches(6))
+    if plot_flags.get('trends') and os.path.exists(output_trends_plot_path):
+        doc.add_picture(output_trends_plot_path, width=Inches(6))
+    else:
+        doc.add_paragraph("Plot not generated due to missing data.")
     
     doc.save(output_report_path)
     print(f"Analysis report generated successfully at {output_report_path}")
@@ -447,8 +483,8 @@ def main():
     analysis_results, scada_data, outliers = perform_analysis(scada_data, start_date, end_date)
     
     if analysis_results:
-        generate_plots(scada_data)
-        generate_word_report(analysis_results, scada_data, outliers, start_date, end_date)
+        plot_flags = generate_plots(scada_data)
+        generate_word_report(analysis_results, scada_data, outliers, start_date, end_date, plot_flags)
         print("C-00 analysis complete.")
     else:
         print("Analysis failed: no data to process.")
