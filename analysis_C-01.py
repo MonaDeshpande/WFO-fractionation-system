@@ -1,5 +1,5 @@
 import pandas as pd
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, inspect
 import psycopg2
 from datetime import datetime
 import matplotlib.pyplot as plt
@@ -7,7 +7,6 @@ import os
 import numpy as np
 from docx import Document
 from docx.shared import Inches
-import sqlalchemy
 import re
 
 # Database connection parameters (update with your actual details)
@@ -21,7 +20,7 @@ TAG_UNITS = {
     'FT-02': 'kg/h',
     'FT-05': 'kg/h',
     'FT-08': 'kg/h',
-    'FT-62': 'kg/h', # Added FT-62
+    'FT-62': 'kg/h',
     'TI-02': 'degC',
     'TI-04': 'degC',
     'TI-05': 'degC',
@@ -87,7 +86,7 @@ def get_scada_data(engine, start_date='2025-08-08 00:40:00', end_date='2025-08-2
             "TI-204", "TI-205", "TI-206", "TI-202", "TI-110", "TI-111", "FI-101"
         ]
         
-        inspector = sqlalchemy.inspect(engine)
+        inspector = inspect(engine)
         columns = inspector.get_columns('wide_scada_data')
         column_names = [col['name'] for col in columns]
         
@@ -209,10 +208,12 @@ def perform_analysis(df):
 
 def generate_plots(df):
     """Generates and saves temperature profile, DP, and energy plots."""
+    plot_created_flags = {}
+
     # Temperature Profile Plot
     try:
         plt.figure(figsize=(10, 6))
-        if 'DATEANDTIME' in df.columns:
+        if 'DATEANDTIME' in df.columns and not df.empty:
             df.sort_values(by='DATEANDTIME', inplace=True)
             x_axis = df['DATEANDTIME']
             if 'TI_04' in df.columns: plt.plot(x_axis, df['TI_04'], label='TI-04 (Top)', alpha=0.7)
@@ -230,13 +231,14 @@ def generate_plots(df):
             plt.savefig(output_temp_plot_path)
             plt.close()
             print(f"Temperature profile plot saved to {output_temp_plot_path}")
-            
+            plot_created_flags['temp_profile'] = True
     except Exception as e:
         print(f"Error generating temperature plot: {e}")
+        plot_created_flags['temp_profile'] = False
         
     # Differential Pressure Plot
     try:
-        if 'DIFFERENTIAL_PRESSURE' in df.columns:
+        if 'DIFFERENTIAL_PRESSURE' in df.columns and not df['DIFFERENTIAL_PRESSURE'].isnull().all() and not df.empty:
             plt.figure(figsize=(10, 6))
             plt.plot(df['DATEANDTIME'], df['DIFFERENTIAL_PRESSURE'], color='purple', alpha=0.8)
             plt.title("C-01 Differential Pressure Over Time")
@@ -247,37 +249,43 @@ def generate_plots(df):
             plt.savefig(output_dp_plot_path)
             plt.close()
             print(f"Differential pressure plot saved to {output_dp_plot_path}")
+            plot_created_flags['dp'] = True
     except Exception as e:
         print(f"Error generating DP plot: {e}")
+        plot_created_flags['dp'] = False
 
     # Daily Trends Plot
     try:
-        df['DATE'] = df['DATEANDTIME'].dt.date
-        daily_trends = df.groupby('DATE').agg({
-            'FT_02': 'mean',
-            'TI_07': 'mean',
-            'DIFFERENTIAL_PRESSURE': 'mean'
-        }).reset_index()
+        if 'DATEANDTIME' in df.columns and not df.empty:
+            df['DATE'] = df['DATEANDTIME'].dt.date
+            daily_trends = df.groupby('DATE').agg({
+                'FT_02': 'mean',
+                'TI_07': 'mean',
+                'DIFFERENTIAL_PRESSURE': 'mean'
+            }).reset_index()
 
-        plt.figure(figsize=(12, 8))
-        plt.plot(daily_trends['DATE'], daily_trends['FT_02'], label=f"Avg Top Product Flow ({TAG_UNITS['FT-02']})")
-        plt.plot(daily_trends['DATE'], daily_trends['TI_07'], label=f"Avg Top Temp ({TAG_UNITS['TI-07']})")
-        plt.plot(daily_trends['DATE'], daily_trends['DIFFERENTIAL_PRESSURE'], label=f"Avg DP ({TAG_UNITS['DIFFERENTIAL_PRESSURE']})")
-        plt.title("C-01 Daily Trends")
-        plt.xlabel("Date")
-        plt.ylabel("Value")
-        plt.legend()
-        plt.grid(True)
-        plt.tight_layout()
-        plt.savefig(output_trends_plot_path)
-        plt.close()
-        print(f"Daily trends plot saved to {output_trends_plot_path}")
+            plt.figure(figsize=(12, 8))
+            if 'FT_02' in daily_trends.columns: plt.plot(daily_trends['DATE'], daily_trends['FT_02'], label=f"Avg Top Product Flow ({TAG_UNITS['FT-02']})")
+            if 'TI_07' in daily_trends.columns: plt.plot(daily_trends['DATE'], daily_trends['TI_07'], label=f"Avg Top Temp ({TAG_UNITS['TI-07']})")
+            if 'DIFFERENTIAL_PRESSURE' in daily_trends.columns: plt.plot(daily_trends['DATE'], daily_trends['DIFFERENTIAL_PRESSURE'], label=f"Avg DP ({TAG_UNITS['DIFFERENTIAL_PRESSURE']})")
+            
+            plt.title("C-01 Daily Trends")
+            plt.xlabel("Date")
+            plt.ylabel("Value")
+            plt.legend()
+            plt.grid(True)
+            plt.tight_layout()
+            plt.savefig(output_trends_plot_path)
+            plt.close()
+            print(f"Daily trends plot saved to {output_trends_plot_path}")
+            plot_created_flags['trends'] = True
     except Exception as e:
         print(f"Error generating daily trends plot: {e}")
+        plot_created_flags['trends'] = False
         
     # Performance Plot: Naphthalene Loss vs. Reboiler Heat Duty
     try:
-        if all(tag in df.columns for tag in ['NAPHTHALENE_IN_BOTTOM_FLOW', 'REBOILER_HEAT_DUTY']):
+        if all(tag in df.columns for tag in ['NAPHTHALENE_IN_BOTTOM_FLOW', 'REBOILER_HEAT_DUTY']) and not df.empty:
             plt.figure(figsize=(10, 6))
             plt.scatter(df['REBOILER_HEAT_DUTY'], df['NAPHTHALENE_IN_BOTTOM_FLOW'], alpha=0.5)
             plt.title("Naphthalene Loss vs. Reboiler Heat Duty")
@@ -288,12 +296,14 @@ def generate_plots(df):
             plt.savefig(output_loss_vs_reboiler_plot_path)
             plt.close()
             print(f"Naphthalene Loss vs. Reboiler Heat Duty plot saved to {output_loss_vs_reboiler_plot_path}")
+            plot_created_flags['loss_vs_reboiler'] = True
     except Exception as e:
         print(f"Error generating performance plot: {e}")
+        plot_created_flags['loss_vs_reboiler'] = False
 
     # Performance Plot: Naphthalene Loss vs. Reflux Ratio
     try:
-        if all(tag in df.columns for tag in ['NAPHTHALENE_IN_BOTTOM_FLOW', 'REFLUX_RATIO']):
+        if all(tag in df.columns for tag in ['NAPHTHALENE_IN_BOTTOM_FLOW', 'REFLUX_RATIO']) and not df.empty:
             plt.figure(figsize=(10, 6))
             plt.scatter(df['REFLUX_RATIO'], df['NAPHTHALENE_IN_BOTTOM_FLOW'], alpha=0.5)
             plt.title("Naphthalene Loss vs. Reflux Ratio")
@@ -304,12 +314,14 @@ def generate_plots(df):
             plt.savefig(output_loss_vs_reflux_plot_path)
             plt.close()
             print(f"Naphthalene Loss vs. Reflux Ratio plot saved to {output_loss_vs_reflux_plot_path}")
+            plot_created_flags['loss_vs_reflux'] = True
     except Exception as e:
         print(f"Error generating Reflux Ratio plot: {e}")
+        plot_created_flags['loss_vs_reflux'] = False
 
     # Performance Plot: Naphthalene Loss vs. Bottom Temperature
     try:
-        if all(tag in df.columns for tag in ['NAPHTHALENE_IN_BOTTOM_FLOW', 'TI_12']):
+        if all(tag in df.columns for tag in ['NAPHTHALENE_IN_BOTTOM_FLOW', 'TI_12']) and not df.empty:
             plt.figure(figsize=(10, 6))
             plt.scatter(df['TI_12'], df['NAPHTHALENE_IN_BOTTOM_FLOW'], alpha=0.5)
             plt.title("Naphthalene Loss vs. Column Bottom Temperature")
@@ -320,10 +332,14 @@ def generate_plots(df):
             plt.savefig(output_loss_vs_temp_plot_path)
             plt.close()
             print(f"Naphthalene Loss vs. Bottom Temperature plot saved to {output_loss_vs_temp_plot_path}")
+            plot_created_flags['loss_vs_temp'] = True
     except Exception as e:
         print(f"Error generating Bottom Temperature plot: {e}")
-
-def generate_word_report(analysis_results, df, outliers, start_date, end_date):
+        plot_created_flags['loss_vs_temp'] = False
+    
+    return plot_created_flags
+    
+def generate_word_report(analysis_results, df, outliers, start_date, end_date, plot_flags):
     """Creates a detailed analysis report in a Word document."""
     doc = Document()
     doc.add_heading('C-01 Anthracene Oil Recovery Column Analysis Report', 0)
@@ -373,15 +389,24 @@ def generate_word_report(analysis_results, df, outliers, start_date, end_date):
     
     doc.add_heading('Naphthalene Loss vs. Reboiler Heat Duty', level=3)
     doc.add_paragraph("This plot shows how increasing the energy input to the reboiler improves separation, leading to a reduction in naphthalene loss.")
-    doc.add_picture(output_loss_vs_reboiler_plot_path, width=Inches(6))
+    if plot_flags.get('loss_vs_reboiler') and os.path.exists(output_loss_vs_reboiler_plot_path):
+        doc.add_picture(output_loss_vs_reboiler_plot_path, width=Inches(6))
+    else:
+        doc.add_paragraph("Plot not generated due to missing data.")
 
     doc.add_heading('Naphthalene Loss vs. Reflux Ratio', level=3)
     doc.add_paragraph("The reflux ratio directly impacts separation efficiency. A higher reflux ratio generally results in a cleaner separation and less naphthalene lost to the bottom stream.")
-    doc.add_picture(output_loss_vs_reflux_plot_path, width=Inches(6))
+    if plot_flags.get('loss_vs_reflux') and os.path.exists(output_loss_vs_reflux_plot_path):
+        doc.add_picture(output_loss_vs_reflux_plot_path, width=Inches(6))
+    else:
+        doc.add_paragraph("Plot not generated due to missing data.")
 
     doc.add_heading('Naphthalene Loss vs. Column Bottom Temperature', level=3)
     doc.add_paragraph("The bottom temperature controls the vaporization of components. A higher temperature favors more naphthalene vaporizing, which should reduce the amount leaving in the bottom product.")
-    doc.add_picture(output_loss_vs_temp_plot_path, width=Inches(6))
+    if plot_flags.get('loss_vs_temp') and os.path.exists(output_loss_vs_temp_plot_path):
+        doc.add_picture(output_loss_vs_temp_plot_path, width=Inches(6))
+    else:
+        doc.add_paragraph("Plot not generated due to missing data.")
 
     # 3.2: Composition Analysis
     doc.add_heading('3.2 Average Stream Compositions', level=2)
@@ -402,15 +427,24 @@ def generate_word_report(analysis_results, df, outliers, start_date, end_date):
 
     doc.add_heading('4.1 Temperature Profile', level=2)
     doc.add_paragraph("The temperature profile plot shows the gradient across the column.")
-    doc.add_picture(output_temp_plot_path, width=Inches(6))
+    if plot_flags.get('temp_profile') and os.path.exists(output_temp_plot_path):
+        doc.add_picture(output_temp_plot_path, width=Inches(6))
+    else:
+        doc.add_paragraph("Plot not generated due to missing data.")
 
     doc.add_heading('4.2 Differential Pressure (DP)', level=2)
     doc.add_paragraph("Differential pressure is a key indicator of flooding or fouling.")
-    doc.add_picture(output_dp_plot_path, width=Inches(6))
+    if plot_flags.get('dp') and os.path.exists(output_dp_plot_path):
+        doc.add_picture(output_dp_plot_path, width=Inches(6))
+    else:
+        doc.add_paragraph("Plot not generated due to missing data.")
 
     doc.add_heading('4.3 Daily Trends', level=2)
     doc.add_paragraph("This plot shows the daily average trends of key variables.")
-    doc.add_picture(output_trends_plot_path, width=Inches(6))
+    if plot_flags.get('trends') and os.path.exists(output_trends_plot_path):
+        doc.add_picture(output_trends_plot_path, width=Inches(6))
+    else:
+        doc.add_paragraph("Plot not generated due to missing data.")
 
     doc.save(output_report_path)
     print(f"Analysis report generated successfully at {output_report_path}")
@@ -428,8 +462,8 @@ def main():
     analysis_results, scada_data, outliers = perform_analysis(scada_data)
     
     if analysis_results:
-        generate_plots(scada_data)
-        generate_word_report(analysis_results, scada_data, outliers, start_date, end_date)
+        plot_flags = generate_plots(scada_data)
+        generate_word_report(analysis_results, scada_data, outliers, start_date, end_date, plot_flags)
         print("C-01 analysis complete.")
     else:
         print("Analysis failed: no data to process.")
