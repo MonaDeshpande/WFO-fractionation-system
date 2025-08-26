@@ -35,10 +35,9 @@ TAG_UNITS = {
     'TI-43': 'degC', # Liquid from vent condenser
     'FT-10': 'kg/h', # Reflux flow rate
     'FT-04': 'kg/h', # Top product flow rate
-    'TI-44': 'degC', # Top product temperature (after cooler)
+    'TI-44': 'degC', # Top product temperature (after cooler) - Placeholder
     'LI-05': '%',    # Column bottom level
     'FT-07': 'kg/h', # Bottom product flow rate
-    'FT-05': 'kg/h', # This tag is from C-01, but in the old C-03 code it was used. FT-07 is the correct tag for C-03 bottoms.
     'TI-45': 'degC', # Bottom product temperature (after heater)
     'TI-73A': 'degC', # Reboiler thermic fluid inlet temp
     'TI-73B': 'degC', # Reboiler thermic fluid outlet temp
@@ -67,7 +66,7 @@ output_trends_plot_path = "C-03_Daily_Trends.png"
 THERMIC_FLUID_SPECIFIC_HEAT = 2.0  # kJ/(kg·°C) - Assumed value
 WATER_SPECIFIC_HEAT = 4.186       # kJ/(kg·°C)
 
-# File path for composition data. The code now simulates reading this.
+# File path for composition data.
 COMPOSITION_FILE_PATH = "your_composition_data.csv"
 
 def connect_to_database():
@@ -113,7 +112,8 @@ def get_scada_data(engine):
         """
         
         df = pd.read_sql(query, engine)
-        df['DateAndTime'] = pd.to_datetime(df['DateAndTime'])
+        df.columns = [col.upper().replace('-', '') for col in df.columns] 
+        df['DATEANDTIME'] = pd.to_datetime(df['DATEANDTIME'])
         print("SCADA data for C-03 retrieved successfully.")
         return df
     except Exception as e:
@@ -123,7 +123,6 @@ def get_scada_data(engine):
 def get_composition_data(file_path):
     """
     Simulates reading composition data from a CSV file.
-    It now simulates reading from your provided image.
     """
     try:
         # Simulate reading the data from the image you provided.
@@ -139,34 +138,30 @@ def get_composition_data(file_path):
         }
         composition_df = pd.DataFrame(composition_data)
         
-        # Get feed composition from C-03 feed (which is C-02 bottom product from the image)
         feed_composition = {}
-        c03_feed = composition_df[composition_df['Sample Detail'] == 'C-02-T'] # C-02 bottom is not available, so we use C-02 top as a placeholder for the feed. This is an assumption.
+        c03_feed = composition_df[composition_df['Sample Detail'] == 'C-02-T'] 
         if not c03_feed.empty:
             feed_composition['Naphth. % by GC'] = c03_feed['Naphth. % by GC'].iloc[-1]
-            feed_composition['Thianaphth. %'] = c03_feed['Thianaphth. %'].iloc[-1] if 'Thianaphth. %' in c03_feed.columns else np.nan
-            feed_composition['Quinoline in ppm'] = c03_feed['Quinoline in ppm'].iloc[-1] if 'Quinoline in ppm' in c03_feed.columns else np.nan
-            feed_composition['Unknown Impurity%'] = c03_feed['Unknown Impurity%'].iloc[-1] if 'Unknown Impurity%' in c03_feed.columns else np.nan
+            feed_composition['Thianaphth. %'] = c03_feed['Thianaphth. %'].iloc[-1]
+            feed_composition['Quinoline in ppm'] = c03_feed['Quinoline in ppm'].iloc[-1]
+            feed_composition['Unknown Impurity%'] = c03_feed['Unknown Impurity%'].iloc[-1]
 
-        # Get top product composition from C-03 top product from the image
         top_product_composition = {}
         c03_top = composition_df[composition_df['Sample Detail'] == 'C-03-T']
         if not c03_top.empty:
             top_product_composition['Naphth. % by GC'] = c03_top['Naphth. % by GC'].iloc[-1]
-            top_product_composition['Thianaphth. %'] = c03_top['Thianaphth. %'].iloc[-1] if 'Thianaphth. %' in c03_top.columns else np.nan
-            top_product_composition['Quinoline in ppm'] = c03_top['Quinoline in ppm'].iloc[-1] if 'Quinoline in ppm' in c03_top.columns else np.nan
-            top_product_composition['Unknown Impurity%'] = c03_top['Unknown Impurity%'].iloc[-1] if 'Unknown Impurity%' in c03_top.columns else np.nan
+            top_product_composition['Thianaphth. %'] = c03_top['Thianaphth. %'].iloc[-1]
+            top_product_composition['Quinoline in ppm'] = c03_top['Quinoline in ppm'].iloc[-1]
+            top_product_composition['Unknown Impurity%'] = c03_top['Unknown Impurity%'].iloc[-1]
         
-        # Get bottom product composition from C-03 bottom product (from the image)
         bottom_product_composition = {}
         c03_bottom = composition_df[composition_df['Sample Detail'] == 'C-03-B']
         if not c03_bottom.empty:
             bottom_product_composition['Naphth. % by GC'] = c03_bottom['Naphth. % by GC'].iloc[-1]
-            bottom_product_composition['Thianaphth. %'] = c03_bottom['Thianaphth. %'].iloc[-1] if 'Thianaphth. %' in c03_bottom.columns else np.nan
-            bottom_product_composition['Quinoline in ppm'] = c03_bottom['Quinoline in ppm'].iloc[-1] if 'Quinoline in ppm' in c03_bottom.columns else np.nan
-            bottom_product_composition['Unknown Impurity%'] = c03_bottom['Unknown Impurity%'].iloc[-1] if 'Unknown Impurity%' in c03_bottom.columns else np.nan
+            bottom_product_composition['Thianaphth. %'] = c03_bottom['Thianaphth. %'].iloc[-1]
+            bottom_product_composition['Quinoline in ppm'] = c03_bottom['Quinoline in ppm'].iloc[-1]
+            bottom_product_composition['Unknown Impurity%'] = c03_bottom['Unknown Impurity%'].iloc[-1]
 
-        # Replace NaN with a default value (e.g., 0) for calculations
         for comp in [feed_composition, top_product_composition, bottom_product_composition]:
             for key, value in comp.items():
                 if pd.isna(value):
@@ -174,9 +169,6 @@ def get_composition_data(file_path):
 
         return feed_composition, top_product_composition, bottom_product_composition
     
-    except FileNotFoundError:
-        print(f"Warning: Composition data file not found at {file_path}. Using default.")
-        return {}, {}, {}
     except Exception as e:
         print(f"Error reading composition data: {e}. Using default.")
         return {}, {}, {}
@@ -193,10 +185,10 @@ def perform_analysis(df):
     analysis_results = {}
     
     # Material Balance Analysis
-    if all(tag in df.columns for tag in ['FT-06', 'FT-04', 'FT-07']):
-        feed_flow_avg = df['FT-06'].mean()
-        top_product_flow_avg = df['FT-04'].mean()
-        bottom_product_flow_avg = df['FT-07'].mean()
+    if all(tag in df.columns for tag in ['FT06', 'FT04', 'FT07']):
+        feed_flow_avg = df['FT06'].mean()
+        top_product_flow_avg = df['FT04'].mean()
+        bottom_product_flow_avg = df['FT07'].mean()
         
         analysis_results['Average Feed Flow (FT-06)'] = feed_flow_avg
         analysis_results['Average Top Product Flow (FT-04)'] = top_product_flow_avg
@@ -207,17 +199,20 @@ def perform_analysis(df):
             analysis_results['Material Balance Error (%)'] = abs(material_balance_error)
 
     # Naphthalene Purity & Impurity Analysis
-    feed_comp, top_prod_comp, bottom_prod_comp = get_composition_data(COMPOSITION_FILE_PATH)
+    feed_comp, top_prod_comp, bottom_prod_comp = get_composition_data('dummy_path')
     
-    # Calculate Naphthalene Loss in C-03 Bottoms
     naphthalene_loss_pct = "N/A"
-    if 'Naphth. % by GC' in feed_comp and 'Naphth. % by GC' in bottom_prod_comp and feed_flow_avg > 0 and bottom_product_flow_avg > 0:
-        feed_naphthalene_mass = feed_flow_avg * (feed_comp['Naphth. % by GC'] / 100)
-        bottoms_naphthalene_mass = bottom_product_flow_avg * (bottom_prod_comp['Naphth. % by GC'] / 100)
+    if 'Naphth. % by GC' in feed_comp and 'Naphth. % by GC' in bottom_prod_comp and 'FT06' in df.columns and 'FT07' in df.columns:
+        feed_flow_avg = df['FT06'].mean()
+        bottom_product_flow_avg = df['FT07'].mean()
         
-        if feed_naphthalene_mass > 0:
-            naphthalene_loss_pct = (bottoms_naphthalene_mass / feed_naphthalene_mass) * 100
-            analysis_results['Naphthalene Loss in C-03 Bottoms (%)'] = naphthalene_loss_pct
+        if feed_flow_avg > 0 and bottom_product_flow_avg > 0:
+            feed_naphthalene_mass = feed_flow_avg * (feed_comp['Naphth. % by GC'] / 100)
+            bottoms_naphthalene_mass = bottom_product_flow_avg * (bottom_prod_comp['Naphth. % by GC'] / 100)
+            
+            if feed_naphthalene_mass > 0:
+                naphthalene_loss_pct = (bottoms_naphthalene_mass / feed_naphthalene_mass) * 100
+                analysis_results['Naphthalene Loss in C-03 Bottoms (%)'] = naphthalene_loss_pct
     else:
         analysis_results['Naphthalene Loss in C-03 Bottoms (%)'] = "N/A (Missing data)"
 
@@ -227,7 +222,7 @@ def perform_analysis(df):
         analysis_results['Quinoline in Top Product (ppm)'] = top_prod_comp.get('Quinoline in ppm', 'N/A')
         analysis_results['Unknown Impurity in Top Product (%)'] = top_prod_comp.get('Unknown Impurity%', 'N/A')
         
-        if top_prod_comp['Naphth. % by GC'] >= 96.0: # Updated purity threshold to 96%
+        if top_prod_comp['Naphth. % by GC'] >= 96.0:
             analysis_results['Naphthalene Purity Status'] = "SUCCESS: Naphthalene purity is at or above target (96%)."
         else:
             analysis_results['Naphthalene Purity Status'] = "ALERT: Naphthalene purity is below target (96%)."
@@ -236,9 +231,9 @@ def perform_analysis(df):
         analysis_results['Naphthalene in Bottom Product (%)'] = bottom_prod_comp['Naphth. % by GC']
     
     # Reflux Ratio
-    if 'FT-10' in df.columns and 'FT-04' in df.columns:
-        reflux_flow_avg = df['FT-10'].mean()
-        top_product_flow_avg = df['FT-04'].mean()
+    if 'FT10' in df.columns and 'FT04' in df.columns:
+        reflux_flow_avg = df['FT10'].mean()
+        top_product_flow_avg = df['FT04'].mean()
         
         if top_product_flow_avg > 0:
             reflux_ratio = reflux_flow_avg / top_product_flow_avg
@@ -247,26 +242,20 @@ def perform_analysis(df):
             analysis_results['Average Reflux Ratio'] = "N/A (Zero Top Product Flow)"
             
     # Differential Pressure (DP) Calculation
-    if 'PTT-03' in df.columns and 'PTB-03' in df.columns:
-        df['DIFFERENTIAL_PRESSURE'] = df['PTB-03'] - df['PTT-03']
+    if 'PTT03' in df.columns and 'PTB03' in df.columns:
+        df['DIFFERENTIAL_PRESSURE'] = df['PTB03'] - df['PTT03']
         analysis_results['Average Differential Pressure'] = df['DIFFERENTIAL_PRESSURE'].mean()
         analysis_results['Maximum Differential Pressure'] = df['DIFFERENTIAL_PRESSURE'].max()
         
     # Energy Balance
-    # Reboiler Heat Duty
-    if all(tag in df.columns for tag in ['TI-73A', 'TI-73B', 'FT-202']):
-        df['REBOILER_HEAT_DUTY'] = df['FT-202'] * THERMIC_FLUID_SPECIFIC_HEAT * (df['TI-73B'] - df['TI-73A'])
-        analysis_results['Average Reboiler Heat Duty'] = df['REBOILER_HEAT_DUTY'].mean()
-    # Using TI-211/TI-212 as alternative reboiler temps
-    elif all(tag in df.columns for tag in ['TI-211', 'TI-212', 'FT-202']):
-        df['REBOILER_HEAT_DUTY'] = df['FT-202'] * THERMIC_FLUID_SPECIFIC_HEAT * (df['TI-212'] - df['TI-211'])
+    if all(tag in df.columns for tag in ['TI73A', 'TI73B', 'FT202']):
+        df['REBOILER_HEAT_DUTY'] = df['FT202'] * THERMIC_FLUID_SPECIFIC_HEAT * (df['TI73B'] - df['TI73A'])
         analysis_results['Average Reboiler Heat Duty'] = df['REBOILER_HEAT_DUTY'].mean()
     else:
         analysis_results['Average Reboiler Heat Duty'] = 'N/A (Missing data)'
 
-    # Condenser Heat Duty
-    if all(tag in df.columns for tag in ['TI-41', 'TI-42', 'FT-104']):
-        df['CONDENSER_HEAT_DUTY'] = df['FT-104'] * WATER_SPECIFIC_HEAT * (df['TI-41'] - df['TI-42'])
+    if all(tag in df.columns for tag in ['TI41', 'TI42', 'FT104']):
+        df['CONDENSER_HEAT_DUTY'] = df['FT104'] * WATER_SPECIFIC_HEAT * (df['TI41'] - df['TI42'])
         analysis_results['Average Condenser Heat Duty'] = df['CONDENSER_HEAT_DUTY'].mean()
     else:
         analysis_results['Average Condenser Heat Duty'] = 'N/A (Missing data)'
@@ -279,18 +268,18 @@ def generate_plots(df):
     try:
         plt.figure(figsize=(10, 6))
         
-        if 'DateAndTime' in df.columns:
-            df.sort_values(by='DateAndTime', inplace=True)
-            x_axis = df['DateAndTime']
+        if 'DATEANDTIME' in df.columns:
+            df.sort_values(by='DATEANDTIME', inplace=True)
+            x_axis = df['DATEANDTIME']
             
-            temp_tags = ['TI-31', 'TI-32', 'TI-33', 'TI-34', 'TI-35', 'TI-36', 'TI-37', 'TI-38', 'TI-39', 'TI-40']
+            temp_tags = ['TI31', 'TI32', 'TI33', 'TI34', 'TI35', 'TI36', 'TI37', 'TI38', 'TI39', 'TI40']
             for tag in temp_tags:
                 if tag in df.columns:
                     plt.plot(x_axis, df[tag], label=tag, alpha=0.7)
 
             plt.title("C-03 Column Temperature Profile Over Time")
             plt.xlabel("Date and Time")
-            plt.ylabel(f"Temperature ({TAG_UNITS['TI-31']})")
+            plt.ylabel(f"Temperature (degC)")
             plt.legend(ncol=2)
             plt.grid(True)
             plt.tight_layout()
@@ -305,7 +294,7 @@ def generate_plots(df):
     try:
         if 'DIFFERENTIAL_PRESSURE' in df.columns:
             plt.figure(figsize=(10, 6))
-            plt.plot(df['DateAndTime'], df['DIFFERENTIAL_PRESSURE'], color='purple', alpha=0.8)
+            plt.plot(df['DATEANDTIME'], df['DIFFERENTIAL_PRESSURE'], color='purple', alpha=0.8)
             plt.title("C-03 Differential Pressure Over Time")
             plt.xlabel("Date and Time")
             plt.ylabel(f"Differential Pressure ({TAG_UNITS['DIFFERENTIAL_PRESSURE']})")
@@ -319,17 +308,24 @@ def generate_plots(df):
 
     # Daily Trends Plot
     try:
-        df['DATE'] = df['DateAndTime'].dt.date
-        daily_trends = df.groupby('DATE').agg({
-            'FT-04': 'mean',
-            'TI-44': 'mean', 
-            'DIFFERENTIAL_PRESSURE': 'mean'
-        }).reset_index()
+        df['DATE'] = df['DATEANDTIME'].dt.date
+        
+        # Check for column existence before using it in the groupby aggregation
+        agg_dict = {'FT04': 'mean', 'DIFFERENTIAL_PRESSURE': 'mean'}
+        if 'TI44' in df.columns:
+            agg_dict['TI44'] = 'mean'
+            
+        daily_trends = df.groupby('DATE').agg(agg_dict).reset_index()
 
         plt.figure(figsize=(12, 8))
-        plt.plot(daily_trends['DATE'], daily_trends['FT-04'], label=f"Avg Top Product Flow ({TAG_UNITS['FT-04']})")
-        plt.plot(daily_trends['DATE'], daily_trends['TI-44'], label=f"Avg Top Product Temp ({TAG_UNITS['TI-44']})")
+        plt.plot(daily_trends['DATE'], daily_trends['FT04'], label=f"Avg Top Product Flow ({TAG_UNITS['FT-04']})")
+        
+        # Only plot TI-44 if the column exists in the aggregated data
+        if 'TI44' in daily_trends.columns:
+            plt.plot(daily_trends['DATE'], daily_trends['TI44'], label=f"Avg Top Product Temp ({TAG_UNITS['TI-44']})")
+        
         plt.plot(daily_trends['DATE'], daily_trends['DIFFERENTIAL_PRESSURE'], label=f"Avg DP ({TAG_UNITS['DIFFERENTIAL_PRESSURE']})")
+        
         plt.title("C-03 Daily Trends")
         plt.xlabel("Date")
         plt.ylabel("Value")
