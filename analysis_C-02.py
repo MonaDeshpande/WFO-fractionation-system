@@ -21,8 +21,11 @@ TAG_UNITS = {
     'FT-01': 'kg/h',
     'FT-02': 'kg/h',
     'FT-03': 'kg/h',
+    'FT-05': 'kg/h',
     'FT-06': 'kg/h',
+    'FT-09': 'kg/h',
     'FT-61': 'kg/h',
+    'FT-62': 'kg/h',
     'FI-103': 'kg/h',
     'FI-202': 'kg/h',
     'TI-11': 'degC',
@@ -81,7 +84,7 @@ def get_scada_data(engine):
     """Retrieves specific SCADA data for the C-02 column and related streams."""
     try:
         desired_columns = [
-            "DateAndTime", "FT-01", "FT-02", "FT-03", "FT-06", "FT-09", "FT-61", "TI-11", "TI-13", "TI-14", "TI-15", "TI-16", 
+            "DateAndTime", "FT-01", "FT-02", "FT-03", "FT-05", "FT-06", "FT-09", "FT-61", "FT-62", "TI-11", "TI-13", "TI-14", "TI-15", "TI-16",
             "TI-17", "TI-18", "TI-19", "TI-20", "TI-21", "TI-22", "TI-23", "TI-24", "TI-25", "TI-26",
             "TI-27", "TI-28", "TI-29", "TI-30", "TI-72A", "TI-72B", "PTT-02", "PTB-02", "LI-03",
             "FI-103", "FI-202"
@@ -112,7 +115,7 @@ def get_scada_data(engine):
         
         df = pd.read_sql(query, engine)
         df['DateAndTime'] = pd.to_datetime(df['DateAndTime'])
-        print("SCADA data for C-02 and related streams retrieved successfully.")
+        print("SCADA data for process streams retrieved successfully.")
         return df
     except Exception as e:
         print(f"Error retrieving SCADA data: {e}")
@@ -120,16 +123,17 @@ def get_scada_data(engine):
 
 def get_composition_data():
     """
-    Simulates reading composition data from a lab analysis report.
+    Simulates reading composition data from a lab analysis report based on user feedback.
     Returns a dictionary of compositions for each component at specific sample points.
     """
     try:
         # Simulate data from the provided description
+        # These are assumed values. The logic will use them to calculate intermediate compositions.
         composition_data = {
             'Naphthalene': {
-                'P-01': 0.1,    # Assumed composition in total feed (10%)
-                'C-01-B': 0.02, # Naphthalene loss in C-01 bottom product (2% is acceptable)
-                'C-02-T': 0.08  # Assumed composition in C-02 top product (8%)
+                'P-01': 0.1,    
+                'C-01-B': 0.02, 
+                'C-02-T': 0.08,
             },
             'Thianaphthene': {
                 'P-01': 0.05,
@@ -147,7 +151,7 @@ def get_composition_data():
                 'C-02-T': 0.002
             },
             'Moisture': {
-                'P-01': 0.15 # 15% moisture in the total feed
+                'P-01': 0.15 
             }
         }
         return composition_data
@@ -157,70 +161,101 @@ def get_composition_data():
 
 def perform_analysis(df):
     """
-    Performs key calculations for the process, including material/energy balances
-    and component-wise analysis.
+    Performs key calculations for the C-02 column and the overall process,
+    including staged material balances.
     """
     if df is None or df.empty:
         return {}, df, {}
 
     analysis_results = {}
+    composition_data = get_composition_data()
     
-    # Material Balance Analysis for the entire process
-    if all(tag in df.columns for tag in ['FT-01', 'FT-03', 'FT-06', 'FT-61']):
-        total_feed_avg = df['FT-01'].mean()
-        moisture_removed_avg = df['FT-61'].mean()
+    # --- Staged Material Balance Calculations ---
+    if all(tag in df.columns for tag in ['FT-01', 'FT-61', 'FT-62', 'FT-05', 'FT-02', 'FT-03', 'FT-06']):
+        
+        # Calculate average flows for the period
+        avg_flows = {tag: df[tag].mean() for tag in ['FT-01', 'FT-61', 'FT-62', 'FT-05', 'FT-02', 'FT-03', 'FT-06']}
+
+        analysis_results['Component-wise Material Balance'] = {}
+        
+        # C-00 (Dehydration) Balance
+        # Calculate the composition of the C-00 bottoms (FT-62)
+        c00_bottoms_comp = {}
+        input_flow_c00 = avg_flows['FT-01']
+        output_flow_c00 = avg_flows['FT-62'] + avg_flows['FT-61']
+        
+        # Overall C-00 Balance
+        c00_balance_error = ((input_flow_c00 - output_flow_c00) / input_flow_c00) * 100 if input_flow_c00 > 0 else 0
+        analysis_results['C-00 Overall Material Balance Error (%)'] = abs(c00_balance_error)
+
+        # C-01 Balance and Naphthalene Loss
+        naphthalene_in_c01 = 0
+        
+        for component, comps in composition_data.items():
+            if input_flow_c00 > 0:
+                input_mass_c00 = input_flow_c00 * comps['P-01']
+            else:
+                input_mass_c00 = 0
+
+            if component == 'Moisture':
+                # Moisture is removed
+                output_mass_c00 = avg_flows['FT-61']
+            else:
+                # Other components are conserved and go to FT-62
+                output_mass_c00 = input_mass_c00
+                if avg_flows['FT-62'] > 0:
+                    c00_bottoms_comp[component] = output_mass_c00 / avg_flows['FT-62']
+                else:
+                    c00_bottoms_comp[component] = 0
+            
+            # C-01 Balance
+            input_mass_c01 = avg_flows['FT-62'] * c00_bottoms_comp.get(component, 0)
+            
+            if component == 'Naphthalene':
+                naphthalene_in_c01 = input_mass_c01
+
+            # Get output mass from C-01 bottom (FT-05) and C-01 top (FT-02)
+            output_mass_c01_bottom = avg_flows['FT-05'] * comps.get('C-01-B', 0)
+            # We calculate FT-02 composition by difference
+            output_mass_c01_top = input_mass_c01 - output_mass_c01_bottom
+            
+            c01_balance_error = ((input_mass_c01 - (output_mass_c01_bottom + output_mass_c01_top)) / input_mass_c01) * 100 if input_mass_c01 > 0 else 0
+            
+            analysis_results['Component-wise Material Balance'][f'C-01 Balance Error for {component}'] = abs(c01_balance_error)
+
+        # Naphthalene Loss in C-01
+        naphthalene_out_c01 = (avg_flows['FT-05'] * composition_data['Naphthalene'].get('C-01-B', 0)) + \
+                              (avg_flows['FT-02'] * (naphthalene_in_c01 - (avg_flows['FT-05'] * composition_data['Naphthalene'].get('C-01-B', 0))) / avg_flows['FT-02']) if avg_flows['FT-02'] > 0 else 0
+        naphthalene_loss_c01 = ((naphthalene_in_c01 - naphthalene_out_c01) / naphthalene_in_c01) * 100 if naphthalene_in_c01 > 0 else 0
+        analysis_results['Naphthalene Loss in C-01 (%)'] = naphthalene_loss_c01
+        
+        if naphthalene_loss_c01 > 2:
+            analysis_results['C-01 Naphthalene Loss Status'] = "ALERT: Naphthalene loss is above the 2% limit."
+        else:
+            analysis_results['C-01 Naphthalene Loss Status'] = "Naphthalene loss is within acceptable limits."
+
+    # C-02 Material Balance & Other KPIs
+    # Note: The C-02 bottoms flow is FT-06
+    if all(tag in df.columns for tag in ['FT-02', 'FT-03', 'FT-06']):
+        feed_flow_avg = df['FT-02'].mean()
         top_product_flow_avg = df['FT-03'].mean()
         bottom_product_flow_avg = df['FT-06'].mean()
         
-        net_feed = total_feed_avg - moisture_removed_avg
-        total_products = top_product_flow_avg + bottom_product_flow_avg
-        
-        if net_feed > 0:
-            overall_balance_error = ((net_feed - total_products) / net_feed) * 100
-            analysis_results['Overall Material Balance Error (%)'] = abs(overall_balance_error)
+        if feed_flow_avg > 0:
+            material_balance_error = ((feed_flow_avg - (top_product_flow_avg + bottom_product_flow_avg)) / feed_flow_avg) * 100
+            analysis_results['C-02 Overall Material Balance Error (%)'] = abs(material_balance_error)
 
-    # Component-wise Material Balance
-    composition_data = get_composition_data()
-    if composition_data:
-        analysis_results['Component-wise Material Balance'] = {}
-        
-        # Assume FT-02 is the feed to C-02, which is the top product of C-01
-        c02_feed_flow_avg = df['FT-02'].mean()
-        
-        for component, comps in composition_data.items():
-            if component == 'Moisture':
-                # Moisture is removed in the first step
-                input_mass_flow = df['FT-01'].mean() * comps['P-01']
-                output_mass_flow = df['FT-61'].mean()
-            else:
-                input_mass_flow = df['FT-01'].mean() * comps['P-01']
-                # The user description is a bit ambiguous, but we will assume
-                # the component leaves in either the C-02 top or C-01 bottom.
-                output_mass_flow = (df['FT-03'].mean() * comps['C-02-T']) + (df['FT-06'].mean() * comps['C-01-B'])
-            
-            if input_mass_flow > 0:
-                component_balance_error = ((input_mass_flow - output_mass_flow) / input_mass_flow) * 100
-                analysis_results['Component-wise Material Balance'][f'Error for {component}'] = abs(component_balance_error)
-                
-    # Naphthalene Loss & Impurity Analysis
+    # Naphthalene Loss & Impurity Analysis for C-02
     if composition_data and 'Naphthalene' in composition_data:
         top_prod_comp = composition_data['Naphthalene'].get('C-02-T')
-        c01_bottom_comp = composition_data['Naphthalene'].get('C-01-B')
         
         if top_prod_comp is not None:
-            analysis_results['Naphthalene in Top Product (%)'] = top_prod_comp * 100
-            if top_prod_comp > 0.15: # 15% threshold for C-02
+            analysis_results['Naphthalene in C-02 Top Product (%)'] = top_prod_comp * 100
+            if top_prod_comp > 0.15: # 15% threshold for C-02 top product
                 analysis_results['C-02 Naphthalene Loss Status'] = "ALERT: Naphthalene loss is above 15%."
             else:
                 analysis_results['C-02 Naphthalene Loss Status'] = "Naphthalene loss is within acceptable limits (below 15%)."
-
-        if c01_bottom_comp is not None:
-            analysis_results['Naphthalene in C-01 Bottom Product (%)'] = c01_bottom_comp * 100
-            if c01_bottom_comp > 0.02: # 2% threshold for C-01 bottom
-                analysis_results['C-01 Naphthalene Loss Status'] = "ALERT: Naphthalene loss is above 2%."
-            else:
-                analysis_results['C-01 Naphthalene Loss Status'] = "Naphthalene loss is within acceptable limits (below 2%)."
-
+    
     # Reflux Ratio
     if 'FT-09' in df.columns and 'FT-03' in df.columns:
         reflux_flow_avg = df['FT-09'].mean()
@@ -238,7 +273,7 @@ def perform_analysis(df):
         analysis_results['Average Differential Pressure'] = df['DIFFERENTIAL_PRESSURE'].mean()
         analysis_results['Maximum Differential Pressure'] = df['DIFFERENTIAL_PRESSURE'].max()
         
-    # Energy Balance
+    # Energy Balance (C-02 specific)
     # Reboiler Heat Duty
     if all(tag in df.columns for tag in ['TI-72A', 'TI-72B', 'FI-202']):
         df['REBOILER_HEAT_DUTY'] = df['FI-202'] * THERMIC_FLUID_SPECIFIC_HEAT * (df['TI-72B'] - df['TI-72A'])
@@ -332,13 +367,13 @@ def generate_word_report(analysis_results, df, outliers):
     if 'Average Reflux Ratio' in analysis_results and isinstance(analysis_results['Average Reflux Ratio'], (float, int)):
         summary_text += f"The column operated with an average reflux ratio of {analysis_results['Average Reflux Ratio']:.2f}, indicating effective control over product separation. "
     
-    if 'Overall Material Balance Error (%)' in analysis_results:
-        summary_text += f"An overall material balance error of {analysis_results['Overall Material Balance Error (%)']:.2f}% was calculated for the entire process. "
+    if 'C-02 Overall Material Balance Error (%)' in analysis_results:
+        summary_text += f"The C-02 column had a material balance error of {analysis_results['C-02 Overall Material Balance Error (%)']:.2f}%. "
     
     if 'C-02 Naphthalene Loss Status' in analysis_results:
         summary_text += analysis_results['C-02 Naphthalene Loss Status']
-        if 'Naphthalene in Top Product (%)' in analysis_results:
-            summary_text += f" (Current loss: {analysis_results['Naphthalene in Top Product (%)']:.2f}%)"
+        if 'Naphthalene in C-02 Top Product (%)' in analysis_results:
+            summary_text += f" (Current loss: {analysis_results['Naphthalene in C-02 Top Product (%)']:.2f}%)"
     
     doc.add_paragraph(summary_text)
 
@@ -346,7 +381,7 @@ def generate_word_report(analysis_results, df, outliers):
     doc.add_heading('2. Key Performance Indicators (KPIs)', level=1)
     doc.add_paragraph("All values are averages over the analysis period.")
     for key, value in analysis_results.items():
-        if key == 'Component-wise Material Balance':
+        if key.startswith(('C-00', 'C-01', 'Component')) or key.endswith('Status'):
             continue
         tag_match = re.search(r'\((.*?)\)', key)
         if tag_match:
@@ -360,9 +395,22 @@ def generate_word_report(analysis_results, df, outliers):
         else:
             doc.add_paragraph(f"• {key}: {value:.2f} {unit}")
 
-    # Section 3: Component-wise Material Balance
-    doc.add_heading('3. Component-wise Material Balance', level=1)
-    doc.add_paragraph("This section details the material balance for key components, checking for losses across the system.")
+    # Section 3: Material Balance Analysis
+    doc.add_heading('3. Material Balance Analysis', level=1)
+    
+    doc.add_heading('3.1 C-00 and C-01 Material Balance', level=2)
+    if 'C-00 Overall Material Balance Error (%)' in analysis_results:
+        doc.add_paragraph(f"• C-00 Overall Material Balance Error: {analysis_results['C-00 Overall Material Balance Error (%)']:.2f}%")
+    if 'Naphthalene Loss in C-01 (%)' in analysis_results:
+        doc.add_paragraph(f"• Naphthalene Loss in C-01: {analysis_results['Naphthalene Loss in C-01 (%)']:.2f}%")
+    if 'C-01 Naphthalene Loss Status' in analysis_results:
+        doc.add_paragraph(f"  - {analysis_results['C-01 Naphthalene Loss Status']}")
+
+    doc.add_heading('3.2 C-02 Material Balance', level=2)
+    doc.add_paragraph(f"• C-02 Overall Material Balance Error: {analysis_results.get('C-02 Overall Material Balance Error (%)', 'N/A'):.2f}%")
+    
+    doc.add_heading('3.3 Component-wise Balance', level=2)
+    doc.add_paragraph("This section details the material balance for key components across the C-01 and C-02 system.")
     if 'Component-wise Material Balance' in analysis_results:
         comp_balance = analysis_results['Component-wise Material Balance']
         for comp_key, comp_value in comp_balance.items():

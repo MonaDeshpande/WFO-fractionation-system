@@ -64,16 +64,6 @@ output_trends_plot_path = "C-01_Daily_Trends.png"
 THERMIC_FLUID_SPECIFIC_HEAT = 2.0  # kJ/(kg·°C) - Assumed value, replace with specific data if available
 WATER_SPECIFIC_HEAT = 4.186       # kJ/(kg·°C)
 
-# Sample compositions from your .csv file data (placeholders)
-# In a real-world scenario, you would read these values dynamically from the file.
-# For now, these are static placeholders based on your description.
-# P-01 Naphthalene as Naphth. % by GC
-NAPHTHALENE_IN_FEED_PERCENT = 0.05
-# C-01 -B (Anthracene Oil) Naphthalene loss in ATOO
-NAPHTHALENE_IN_BOTTOM_PRODUCT_PERCENT = 0.02
-# From your C-00 bottom product analysis
-MOISTURE_IN_C01_FEED_PERCENT = 0.002 # Example 0.2% from C-00 analysis
-
 def connect_to_database():
     """Establishes a connection to the PostgreSQL database."""
     try:
@@ -102,7 +92,6 @@ def get_scada_data(engine):
         
         final_columns = []
         for d_col in desired_columns:
-            # Match case-insensitively and handle spaces/hyphens
             for db_col in column_names:
                 if d_col.replace('-', '').lower() == db_col.replace('-', '').lower():
                     final_columns.append(f'"{db_col}"')
@@ -116,7 +105,7 @@ def get_scada_data(engine):
         query = f"""
         SELECT {select_clause}
         FROM wide_scada_data
-        WHERE "DateAndTime" BETWEEN '2025-08-08 00:00:00' AND '2025-08-20 23:59:59'
+        WHERE "DateAndTime" BETWEEN '2025-08-08 00:40:00' AND '2025-08-20 12:40:59'
         ORDER BY "DateAndTime";
         """
         
@@ -129,6 +118,24 @@ def get_scada_data(engine):
         print(f"Error retrieving SCADA data: {e}")
         return None
 
+def get_feed_composition():
+    """Simulates getting feed composition data from C-00 bottom product."""
+    # This data would come from the C-00 analysis or a lab sheet
+    return {
+        'Naphthalene': 95.0, # % (High percentage after moisture removal in C-00)
+        'Thianaphthalene': 2.0, # %
+        'Quinoline': 1.7, # %
+        'Unknown_impurity': 1.3, # %
+    }
+
+def get_bottom_product_composition():
+    """Simulates getting bottom product composition data from a lab sheet (C-01-B)."""
+    # This data would come from a lab sheet
+    return {
+        'Naphthalene': 2.0, # % (Remaining Naphthalene)
+        'Anthracene Oil': 98.0, # %
+    }
+
 def perform_analysis(df):
     """
     Performs key calculations for C-01, including material/energy balances
@@ -140,34 +147,58 @@ def perform_analysis(df):
     outliers = {}
     analysis_results = {}
     
-    # Material Balance
-    # Feed to C-01 is C-00 bottom product, which is indicated by FT-05 in the C-01 system.
-    # Top product is FT-02, Bottom is FT-05 (typo corrected based on your last message)
-    if 'FT_02' in df.columns and 'FT_05' in df.columns:
-        feed_flow_avg = df['FT_05'].mean()
-        top_product_flow_avg = df['FT_02'].mean()
-        bottom_product_flow_avg = df['FT_05'].mean()
-        
-        analysis_results['Average Feed Flow'] = feed_flow_avg
-        analysis_results['Average Top Product Flow (FT-02)'] = top_product_flow_avg
-        analysis_results['Average Bottom Product Flow (FT-05)'] = bottom_product_flow_avg
-        
+    # Get average flow rates
+    feed_flow_avg = df['FT_05'].mean()
+    top_product_flow_avg = df['FT_02'].mean()
+    bottom_product_flow_avg = df['FT_05'].mean() # Note: FT-05 is also the bottom product flow
+    
+    analysis_results['Average Feed Flow (FT-05)'] = feed_flow_avg
+    analysis_results['Average Top Product Flow (FT-02)'] = top_product_flow_avg
+    analysis_results['Average Bottom Product Flow (FT-05)'] = bottom_product_flow_avg
+    
+    # Overall Material Balance
+    if feed_flow_avg > 0:
         material_balance_error = ((feed_flow_avg - (top_product_flow_avg + bottom_product_flow_avg)) / feed_flow_avg) * 100
         analysis_results['Material Balance Error (%)'] = abs(material_balance_error)
 
+    # Component-wise Material Balance and Composition Calculation
+    feed_composition = get_feed_composition()
+    bottom_comp_data = get_bottom_product_composition()
+    
+    top_product_composition = {}
+    if top_product_flow_avg > 0:
+        # Calculate mass flow of each component in the feed and bottom product
+        for component, percent in feed_composition.items():
+            feed_component_mass = feed_flow_avg * (percent / 100.0)
+            
+            # Assuming 'Naphthalene' is the only component also in the bottom product for this example.
+            bottom_component_mass = 0
+            if component == 'Naphthalene':
+                bottom_component_mass = bottom_product_flow_avg * (bottom_comp_data.get('Naphthalene', 0) / 100.0)
+            
+            # Deduce mass flow of the component in the top product
+            top_component_mass = feed_component_mass - bottom_component_mass
+            
+            # Calculate the percentage in the top product
+            if top_component_mass > 0:
+                top_product_composition[component] = (top_component_mass / top_product_flow_avg) * 100
+
+    analysis_results['Top Product Composition'] = top_product_composition
+
     # Naphthalene Loss & Impurity Analysis
     if 'FT_05' in df.columns:
-        bottom_product_avg = df['FT_05'].mean()
-        naphthalene_loss_mass = bottom_product_avg * NAPHTHALENE_IN_BOTTOM_PRODUCT_PERCENT
+        naphthalene_in_bottom_product = bottom_product_flow_avg * (bottom_comp_data.get('Naphthalene', 0) / 100.0)
+        naphthalene_in_feed = feed_flow_avg * (feed_composition.get('Naphthalene', 0) / 100.0)
         
-        analysis_results['Naphthalene Loss (%)'] = NAPHTHALENE_IN_BOTTOM_PRODUCT_PERCENT * 100
-        analysis_results['Naphthalene Loss (mass)'] = naphthalene_loss_mass
-
+        if naphthalene_in_feed > 0:
+            naphthalene_loss_percent = (naphthalene_in_bottom_product / naphthalene_in_feed) * 100
+            analysis_results['Naphthalene Loss (%)'] = naphthalene_loss_percent
+            analysis_results['Naphthalene Loss (mass)'] = naphthalene_in_bottom_product
+    
     # Reflux Ratio
     if 'FT_08' in df.columns and 'FT_02' in df.columns:
         reflux_flow_avg = df['FT_08'].mean()
         top_product_flow_avg = df['FT_02'].mean()
-        
         if top_product_flow_avg > 0:
             reflux_ratio = reflux_flow_avg / top_product_flow_avg
             analysis_results['Average Reflux Ratio'] = reflux_ratio
@@ -190,30 +221,6 @@ def perform_analysis(df):
     if all(tag in df.columns for tag in ['TI_110', 'TI_111', 'FI_101']):
         df['CONDENSER_HEAT_DUTY'] = df['FI_101'] * WATER_SPECIFIC_HEAT * (df['TI_111'] - df['TI_110'])
         analysis_results['Average Main Condenser Heat Duty'] = df['CONDENSER_HEAT_DUTY'].mean()
-
-    # 3. Top Product Heater Heat Duty
-    if all(tag in df.columns for tag in ['TI_205', 'TI_206']):
-        # Assuming thermic fluid is the heating medium, and a flow tag (e.g., FI-205) is needed.
-        # Since no flow tag was provided, a placeholder is used.
-        # This calculation requires the flow rate of the heating medium.
-        # The equation for heat duty is Q = m * C_p * ΔT
-        # We also need the flow of the top product from FT-02 to get the full picture.
-        # The calculation below is based on the temperature change of the top product.
-        if 'FT_02' in df.columns:
-            # Assuming C_p of top product is similar to water for an example
-            product_specific_heat = 2.0 # kJ/(kg·°C) - Placeholder
-            df['TOP_PRODUCT_HEATER_DUTY'] = df['FT_02'] * product_specific_heat * (df['TI_206'] - df['TI_205'])
-            analysis_results['Average Top Product Heater Heat Duty'] = df['TOP_PRODUCT_HEATER_DUTY'].mean()
-
-    # 4. Feed Preheater Heat Duty
-    # Assuming the feed preheater heats the C-01 feed (FT-05) using thermic fluid.
-    if 'TI_202' in df.columns and 'FT_05' in df.columns:
-        # Assuming TI-202 is the temperature of the feed *after* the preheater, and we need an inlet temp.
-        # User said TI-202/TI-202, which is ambiguous. Assuming TI-02 is the feed temp.
-        if 'TI_02' in df.columns:
-            product_specific_heat = 2.0 # kJ/(kg·°C) - Placeholder
-            df['FEED_PREHEATER_DUTY'] = df['FT_05'] * product_specific_heat * (df['TI_202'] - df['TI_02'])
-            analysis_results['Average Feed Preheater Heat Duty'] = df['FEED_PREHEATER_DUTY'].mean()
 
     return analysis_results, df, outliers
 
@@ -303,7 +310,7 @@ def generate_word_report(analysis_results, df, outliers):
         summary_text += f"A material balance error of {analysis_results['Material Balance Error (%)']:.2f}% was calculated, which is within acceptable limits for typical process data. "
     
     if 'Naphthalene Loss (%)' in analysis_results:
-        summary_text += f"Based on the bottom product analysis, a naphthalene loss of {analysis_results['Naphthalene Loss (%)']:.2f}% was observed, corresponding to a mass loss of {analysis_results['Naphthalene Loss (mass)']:.2f} {TAG_UNITS['FT-05']}. "
+        summary_text += f"Based on the bottom product analysis, a naphthalene loss of {analysis_results['Naphthalene Loss (%)']:.2f}% was observed, corresponding to a mass loss of {analysis_results['Naphthalene Loss (mass)']:.2f} kg/h. "
             
     doc.add_paragraph(summary_text)
 
@@ -326,18 +333,40 @@ def generate_word_report(analysis_results, df, outliers):
         else:
              doc.add_paragraph(f"• {key}: {value:.2f} {unit}")
 
-    # Section 3: Performance Plots
-    doc.add_heading('3. Performance Plots', level=1)
+    # Section 3: Composition Analysis
+    doc.add_heading('3. Composition Analysis', level=1)
+    doc.add_paragraph("The tables below show the calculated compositions for the C-01 streams.")
+    
+    doc.add_heading('3.1 Feed (FT-05) Composition', level=2)
+    feed_comp = get_feed_composition()
+    for comp, perc in feed_comp.items():
+        doc.add_paragraph(f"• {comp.replace('_', ' ').capitalize()}: {perc:.2f}%")
+        
+    doc.add_heading('3.2 Bottom Product (FT-05) Composition', level=2)
+    bottom_comp = get_bottom_product_composition()
+    for comp, perc in bottom_comp.items():
+        doc.add_paragraph(f"• {comp.replace('_', ' ').capitalize()}: {perc:.2f}%")
 
-    doc.add_heading('3.1 Temperature Profile', level=2)
+    doc.add_heading('3.3 Top Product (FT-02) Composition', level=2)
+    top_comp = analysis_results.get('Top Product Composition', {})
+    if top_comp:
+        for comp, perc in top_comp.items():
+            doc.add_paragraph(f"• {comp.replace('_', ' ').capitalize()}: {perc:.2f}%")
+    else:
+        doc.add_paragraph("Composition data for the top product is not available due to missing flow data.")
+
+    # Section 4: Performance Plots
+    doc.add_heading('4. Performance Plots', level=1)
+
+    doc.add_heading('4.1 Temperature Profile', level=2)
     doc.add_paragraph("The temperature profile plot shows the gradient across the column.")
     doc.add_picture(output_temp_plot_path, width=Inches(6))
 
-    doc.add_heading('3.2 Differential Pressure (DP)', level=2)
+    doc.add_heading('4.2 Differential Pressure (DP)', level=2)
     doc.add_paragraph("Differential pressure is a key indicator of flooding or fouling.")
     doc.add_picture(output_dp_plot_path, width=Inches(6))
 
-    doc.add_heading('3.3 Daily Trends', level=2)
+    doc.add_heading('4.3 Daily Trends', level=2)
     doc.add_paragraph("This plot shows the daily average trends of key variables.")
     doc.add_picture(output_trends_plot_path, width=Inches(6))
 
