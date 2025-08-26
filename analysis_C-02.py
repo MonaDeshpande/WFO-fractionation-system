@@ -65,10 +65,13 @@ output_report_path = "C-02_Analysis_Report.docx"
 output_temp_plot_path = "C-02_Temperature_Profile.png"
 output_dp_plot_path = "C-02_Differential_Pressure.png"
 output_trends_plot_path = "C-02_Daily_Trends.png"
+output_naphthalene_vs_reflux_plot_path = "C-02_Naphthalene_vs_Reflux.png"
+output_naphthalene_vs_reboiler_temp_plot_path = "C-02_Naphthalene_vs_Reboiler_Temp.png"
+output_feed_vs_dp_plot_path = "C-02_Feed_vs_DP.png"
 
 # Engineering constants for heat duty calculations
 THERMIC_FLUID_SPECIFIC_HEAT = 2.0  # kJ/(kg·°C) - Assumed value
-WATER_SPECIFIC_HEAT = 4.186       # kJ/(kg·°C)
+WATER_SPECIFIC_HEAT = 4.186        # kJ/(kg·°C)
 
 def connect_to_database():
     """Establishes a connection to the PostgreSQL database."""
@@ -90,6 +93,9 @@ def get_scada_data(engine):
             "FI-103", "FI-202"
         ]
         
+        start_date = '2025-08-08 00:00:00'
+        end_date = '2025-08-20 23:59:59'
+
         inspector = sqlalchemy.inspect(engine)
         columns = inspector.get_columns('wide_scada_data')
         column_names = [col['name'] for col in columns]
@@ -103,23 +109,24 @@ def get_scada_data(engine):
         
         if not final_columns:
             print("Error: No matching columns found. Data retrieval failed.")
-            return None
+            return None, start_date, end_date
 
         select_clause = ", ".join(final_columns)
         query = f"""
         SELECT {select_clause}
         FROM wide_scada_data
-        WHERE "DateAndTime" BETWEEN '2025-08-08 00:00:00' AND '2025-08-20 23:59:59'
+        WHERE "DateAndTime" BETWEEN '{start_date}' AND '{end_date}'
         ORDER BY "DateAndTime";
         """
         
         df = pd.read_sql(query, engine)
-        df['DateAndTime'] = pd.to_datetime(df['DateAndTime'])
+        df.columns = [col.upper().replace('-', '_') for col in df.columns]
+        df['DATEANDTIME'] = pd.to_datetime(df['DATEANDTIME'])
         print("SCADA data for process streams retrieved successfully.")
-        return df
+        return df, start_date, end_date
     except Exception as e:
         print(f"Error retrieving SCADA data: {e}")
-        return None
+        return None, None, None
 
 def get_composition_data():
     """
@@ -127,8 +134,6 @@ def get_composition_data():
     Returns a dictionary of compositions for each component at specific sample points.
     """
     try:
-        # Simulate data from the provided description
-        # These are assumed values. The logic will use them to calculate intermediate compositions.
         composition_data = {
             'Naphthalene': {
                 'P-01': 0.1,    
@@ -170,194 +175,191 @@ def perform_analysis(df):
     analysis_results = {}
     composition_data = get_composition_data()
     
+    # Clean and convert data to numeric
+    for col in ['FT_01', 'FT_02', 'FT_03', 'FT_05', 'FT_06', 'FT_09', 'FT_61', 'FT_62', 'FI_103', 'FI_202', 'TI_72A', 'TI_72B', 'PTT_02', 'PTB_02', 'TI_26', 'TI_11']:
+        if col in df.columns:
+            df.loc[:, col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
+
+    # Calculate average flows for the period
+    avg_flows = {tag.replace('-', '_').upper(): df[tag.replace('-', '_').upper()].mean() for tag in ['FT-01', 'FT-61', 'FT-62', 'FT-05', 'FT-02', 'FT-03', 'FT-06', 'FT-09']}
+
     # --- Staged Material Balance Calculations ---
-    if all(tag in df.columns for tag in ['FT-01', 'FT-61', 'FT-62', 'FT-05', 'FT-02', 'FT-03', 'FT-06']):
-        
-        # Calculate average flows for the period
-        avg_flows = {tag: df[tag].mean() for tag in ['FT-01', 'FT-61', 'FT-62', 'FT-05', 'FT-02', 'FT-03', 'FT-06']}
+    analysis_results['Component-wise Material Balance'] = {}
+    
+    # C-00 (Dehydration) Balance
+    input_flow_c00 = avg_flows['FT_01']
+    output_flow_c00 = avg_flows['FT_62'] + avg_flows['FT_61']
+    c00_balance_error = ((input_flow_c00 - output_flow_c00) / input_flow_c00) * 100 if input_flow_c00 > 0 else 0
+    analysis_results['C-00 Overall Material Balance Error (%)'] = abs(c00_balance_error)
 
-        analysis_results['Component-wise Material Balance'] = {}
+    # C-01 Naphthalene Loss Calculation (Corrected logic)
+    if composition_data and 'Naphthalene' in composition_data:
+        # Calculate C-01 feed composition from C-00 feed (P-01) by removing moisture
+        c01_feed_comp_naphthalene = composition_data['Naphthalene']['P-01'] / (1 - composition_data['Moisture']['P-01'])
         
-        # C-00 (Dehydration) Balance
-        # Calculate the composition of the C-00 bottoms (FT-62)
-        c00_bottoms_comp = {}
-        input_flow_c00 = avg_flows['FT-01']
-        output_flow_c00 = avg_flows['FT-62'] + avg_flows['FT-61']
-        
-        # Overall C-00 Balance
-        c00_balance_error = ((input_flow_c00 - output_flow_c00) / input_flow_c00) * 100 if input_flow_c00 > 0 else 0
-        analysis_results['C-00 Overall Material Balance Error (%)'] = abs(c00_balance_error)
+        # Calculate naphthalene mass in C-01 feed
+        naphthalene_mass_in_c01_feed = avg_flows['FT_62'] * c01_feed_comp_naphthalene
 
-        # C-01 Balance and Naphthalene Loss
-        naphthalene_in_c01 = 0
+        # Calculate naphthalene mass in C-01 bottom product
+        naphthalene_mass_in_c01_bottom = avg_flows['FT_05'] * composition_data['Naphthalene']['C-01-B']
         
-        for component, comps in composition_data.items():
-            if input_flow_c00 > 0:
-                input_mass_c00 = input_flow_c00 * comps['P-01']
-            else:
-                input_mass_c00 = 0
-
-            if component == 'Moisture':
-                # Moisture is removed
-                output_mass_c00 = avg_flows['FT-61']
-            else:
-                # Other components are conserved and go to FT-62
-                output_mass_c00 = input_mass_c00
-                if avg_flows['FT-62'] > 0:
-                    c00_bottoms_comp[component] = output_mass_c00 / avg_flows['FT-62']
-                else:
-                    c00_bottoms_comp[component] = 0
+        # Calculate Naphthalene loss percentage
+        if naphthalene_mass_in_c01_feed > 0:
+            naphthalene_loss_percent_c01 = (naphthalene_mass_in_c01_bottom / naphthalene_mass_in_c01_feed) * 100
+        else:
+            naphthalene_loss_percent_c01 = 0
             
-            # C-01 Balance
-            input_mass_c01 = avg_flows['FT-62'] * c00_bottoms_comp.get(component, 0)
-            
-            if component == 'Naphthalene':
-                naphthalene_in_c01 = input_mass_c01
-
-            # Get output mass from C-01 bottom (FT-05) and C-01 top (FT-02)
-            output_mass_c01_bottom = avg_flows['FT-05'] * comps.get('C-01-B', 0)
-            # We calculate FT-02 composition by difference
-            output_mass_c01_top = input_mass_c01 - output_mass_c01_bottom
-            
-            c01_balance_error = ((input_mass_c01 - (output_mass_c01_bottom + output_mass_c01_top)) / input_mass_c01) * 100 if input_mass_c01 > 0 else 0
-            
-            analysis_results['Component-wise Material Balance'][f'C-01 Balance Error for {component}'] = abs(c01_balance_error)
-
-        # Naphthalene Loss in C-01
-        naphthalene_out_c01 = (avg_flows['FT-05'] * composition_data['Naphthalene'].get('C-01-B', 0)) + \
-                              (avg_flows['FT-02'] * (naphthalene_in_c01 - (avg_flows['FT-05'] * composition_data['Naphthalene'].get('C-01-B', 0))) / avg_flows['FT-02']) if avg_flows['FT-02'] > 0 else 0
-        naphthalene_loss_c01 = ((naphthalene_in_c01 - naphthalene_out_c01) / naphthalene_in_c01) * 100 if naphthalene_in_c01 > 0 else 0
-        analysis_results['Naphthalene Loss in C-01 (%)'] = naphthalene_loss_c01
+        analysis_results['Naphthalene Loss in C-01 (%)'] = naphthalene_loss_percent_c01
         
-        if naphthalene_loss_c01 > 2:
+        if naphthalene_loss_percent_c01 > 2:
             analysis_results['C-01 Naphthalene Loss Status'] = "ALERT: Naphthalene loss is above the 2% limit."
         else:
             analysis_results['C-01 Naphthalene Loss Status'] = "Naphthalene loss is within acceptable limits."
 
     # C-02 Material Balance & Other KPIs
-    # Note: The C-02 bottoms flow is FT-06
-    if all(tag in df.columns for tag in ['FT-02', 'FT-03', 'FT-06']):
-        feed_flow_avg = df['FT-02'].mean()
-        top_product_flow_avg = df['FT-03'].mean()
-        bottom_product_flow_avg = df['FT-06'].mean()
+    if all(tag in df.columns for tag in ['FT_02', 'FT_03', 'FT_06']):
+        feed_flow_avg = avg_flows['FT_02']
+        top_product_flow_avg = avg_flows['FT_03']
+        bottom_product_flow_avg = avg_flows['FT_06']
         
         if feed_flow_avg > 0:
             material_balance_error = ((feed_flow_avg - (top_product_flow_avg + bottom_product_flow_avg)) / feed_flow_avg) * 100
             analysis_results['C-02 Overall Material Balance Error (%)'] = abs(material_balance_error)
 
-    # Naphthalene Loss & Impurity Analysis for C-02
-    if composition_data and 'Naphthalene' in composition_data:
-        top_prod_comp = composition_data['Naphthalene'].get('C-02-T')
-        
-        if top_prod_comp is not None:
-            analysis_results['Naphthalene in C-02 Top Product (%)'] = top_prod_comp * 100
-            if top_prod_comp > 0.15: # 15% threshold for C-02 top product
-                analysis_results['C-02 Naphthalene Loss Status'] = "ALERT: Naphthalene loss is above 15%."
-            else:
-                analysis_results['C-02 Naphthalene Loss Status'] = "Naphthalene loss is within acceptable limits (below 15%)."
-    
-    # Reflux Ratio
-    if 'FT-09' in df.columns and 'FT-03' in df.columns:
-        reflux_flow_avg = df['FT-09'].mean()
-        top_product_flow_avg = df['FT-03'].mean()
-        
-        if top_product_flow_avg > 0:
-            reflux_ratio = reflux_flow_avg / top_product_flow_avg
-            analysis_results['Average Reflux Ratio'] = reflux_ratio
-        else:
-            analysis_results['Average Reflux Ratio'] = "N/A (Zero Top Product Flow)"
+    # Reflux Ratio (C-02)
+    if 'FT_09' in df.columns and 'FT_03' in df.columns:
+        df['REFLUX_RATIO'] = df['FT_09'] / df['FT_03']
+        df.loc[df['FT_03'] == 0, 'REFLUX_RATIO'] = 0
+        df['REFLUX_RATIO'] = df['REFLUX_RATIO'].abs()
+        analysis_results['Average Reflux Ratio'] = df['REFLUX_RATIO'].mean()
+    else:
+        analysis_results['Average Reflux Ratio'] = "N/A (Missing data)"
             
     # Differential Pressure (DP) Calculation
-    if 'PTT-02' in df.columns and 'PTB-02' in df.columns:
-        df['DIFFERENTIAL_PRESSURE'] = df['PTB-02'] - df['PTT-02']
+    if 'PTT_02' in df.columns and 'PTB_02' in df.columns:
+        df['DIFFERENTIAL_PRESSURE'] = df['PTB_02'] - df['PTT_02']
         analysis_results['Average Differential Pressure'] = df['DIFFERENTIAL_PRESSURE'].mean()
         analysis_results['Maximum Differential Pressure'] = df['DIFFERENTIAL_PRESSURE'].max()
         
     # Energy Balance (C-02 specific)
-    # Reboiler Heat Duty
-    if all(tag in df.columns for tag in ['TI-72A', 'TI-72B', 'FI-202']):
-        df['REBOILER_HEAT_DUTY'] = df['FI-202'] * THERMIC_FLUID_SPECIFIC_HEAT * (df['TI-72B'] - df['TI-72A'])
+    if all(tag in df.columns for tag in ['TI_72A', 'TI_72B', 'FI_202']):
+        df['REBOILER_HEAT_DUTY'] = df['FI_202'] * THERMIC_FLUID_SPECIFIC_HEAT * (df['TI_72B'] - df['TI_72A'])
         analysis_results['Average Reboiler Heat Duty'] = df['REBOILER_HEAT_DUTY'].mean()
 
-    # Condenser Heat Duty (Main)
-    if all(tag in df.columns for tag in ['TI-26', 'FI-103']):
-        df['CONDENSER_HEAT_DUTY'] = df['FI-103'] * WATER_SPECIFIC_HEAT * (df['TI-26'] - df['TI-11'])
+    if all(tag in df.columns for tag in ['TI_26', 'TI_11', 'FI_103']):
+        df['CONDENSER_HEAT_DUTY'] = df['FI_103'] * WATER_SPECIFIC_HEAT * (df['TI_26'] - df['TI_11'])
         analysis_results['Average Condenser Heat Duty'] = df['CONDENSER_HEAT_DUTY'].mean()
 
+    # Create new columns for plotting based on user request
+    if 'FT_03' in df.columns and composition_data and 'Naphthalene' in composition_data and 'C-02-T' in composition_data['Naphthalene']:
+        df['NAPHTHALENE_IN_C02_TOP_PROD_MASS'] = df['FT_03'] * composition_data['Naphthalene']['C-02-T']
+        analysis_results['Naphthalene in C-02 Top Product (%)'] = composition_data['Naphthalene']['C-02-T'] * 100
+    
     return analysis_results, df, {}
 
 def generate_plots(df):
     """Generates and saves temperature profile, DP, and energy plots."""
-    try:
+    
+    # Check if necessary columns exist for plotting
+    if df is None or df.empty:
+        print("Dataframe is empty, cannot generate plots.")
+        return
+
+    # Helper function to generate a plot
+    def plot_and_save(x_data, y_data, title, xlabel, ylabel, filename, is_scatter=False):
         plt.figure(figsize=(10, 6))
-        
-        if 'DateAndTime' in df.columns:
-            df.sort_values(by='DateAndTime', inplace=True)
-            x_axis = df['DateAndTime']
-            
-            temp_tags = ['TI-13', 'TI-14', 'TI-15', 'TI-16', 'TI-17', 'TI-18', 'TI-19', 'TI-20', 'TI-21', 'TI-22', 'TI-23', 'TI-24', 'TI-25']
-            for tag in temp_tags:
-                if tag in df.columns:
-                    plt.plot(x_axis, df[tag], label=tag, alpha=0.7)
-
-            plt.title("C-02 Column Temperature Profile Over Time")
-            plt.xlabel("Date and Time")
-            plt.ylabel(f"Temperature ({TAG_UNITS['TI-13']})")
-            plt.legend(ncol=2)
-            plt.grid(True)
-            plt.tight_layout()
-            plt.savefig(output_temp_plot_path)
-            plt.close()
-            print(f"Temperature profile plot saved to {output_temp_plot_path}")
-            
-    except Exception as e:
-        print(f"Error generating temperature plot: {e}")
-        
-    # Differential Pressure Plot
-    try:
-        if 'DIFFERENTIAL_PRESSURE' in df.columns:
-            plt.figure(figsize=(10, 6))
-            plt.plot(df['DateAndTime'], df['DIFFERENTIAL_PRESSURE'], color='purple', alpha=0.8)
-            plt.title("C-02 Differential Pressure Over Time")
-            plt.xlabel("Date and Time")
-            plt.ylabel(f"Differential Pressure ({TAG_UNITS['DIFFERENTIAL_PRESSURE']})")
-            plt.grid(True)
-            plt.tight_layout()
-            plt.savefig(output_dp_plot_path)
-            plt.close()
-            print(f"Differential pressure plot saved to {output_dp_plot_path}")
-    except Exception as e:
-        print(f"Error generating DP plot: {e}")
-
-    # Daily Trends Plot
-    try:
-        df['DATE'] = df['DateAndTime'].dt.date
-        daily_trends = df.groupby('DATE').agg({
-            'FT-03': 'mean',
-            'TI-28': 'mean', 
-            'DIFFERENTIAL_PRESSURE': 'mean'
-        }).reset_index()
-
-        plt.figure(figsize=(12, 8))
-        plt.plot(daily_trends['DATE'], daily_trends['FT-03'], label=f"Avg Top Product Flow ({TAG_UNITS['FT-03']})")
-        plt.plot(daily_trends['DATE'], daily_trends['TI-28'], label=f"Avg Top Product Temp ({TAG_UNITS['TI-28']})")
-        plt.plot(daily_trends['DATE'], daily_trends['DIFFERENTIAL_PRESSURE'], label=f"Avg DP ({TAG_UNITS['DIFFERENTIAL_PRESSURE']})")
-        plt.title("C-02 Daily Trends")
-        plt.xlabel("Date")
-        plt.ylabel("Value")
-        plt.legend()
+        if is_scatter:
+            plt.scatter(x_data, y_data, alpha=0.5)
+        else:
+            plt.plot(x_data, y_data, alpha=0.7)
+        plt.title(title)
+        plt.xlabel(xlabel)
+        plt.ylabel(ylabel)
         plt.grid(True)
         plt.tight_layout()
-        plt.savefig(output_trends_plot_path)
+        plt.savefig(filename)
         plt.close()
-        print(f"Daily trends plot saved to {output_trends_plot_path}")
-    except Exception as e:
-        print(f"Error generating daily trends plot: {e}")
+        print(f"Plot saved to {filename}")
         
-def generate_word_report(analysis_results, df, outliers):
+    # Temperature Profile Plot
+    if 'DATEANDTIME' in df.columns:
+        temp_tags = ['TI_13', 'TI_14', 'TI_15', 'TI_16', 'TI_17', 'TI_18', 'TI_19', 'TI_20', 'TI_21', 'TI_22', 'TI_23', 'TI_24', 'TI_25']
+        
+        plt.figure(figsize=(10, 6))
+        df.sort_values(by='DATEANDTIME', inplace=True)
+        x_axis = df['DATEANDTIME']
+        
+        for tag in temp_tags:
+            if tag in df.columns:
+                plt.plot(x_axis, df[tag], label=tag.replace('_', '-'), alpha=0.7)
+        
+        plt.title("C-02 Column Temperature Profile Over Time")
+        plt.xlabel("Date and Time")
+        plt.ylabel(f"Temperature ({TAG_UNITS['TI-13']})")
+        plt.legend(ncol=2)
+        plt.grid(True)
+        plt.tight_layout()
+        plt.savefig(output_temp_plot_path)
+        plt.close()
+        print(f"Temperature profile plot saved to {output_temp_plot_path}")
+
+    # Differential Pressure Plot
+    if 'DIFFERENTIAL_PRESSURE' in df.columns:
+        plot_and_save(df['DATEANDTIME'], df['DIFFERENTIAL_PRESSURE'], 
+                      "C-02 Differential Pressure Over Time", "Date and Time", 
+                      f"Differential Pressure ({TAG_UNITS['DIFFERENTIAL_PRESSURE']})", 
+                      output_dp_plot_path)
+
+    # Daily Trends Plot
+    df['DATE'] = df['DATEANDTIME'].dt.date
+    daily_trends = df.groupby('DATE').agg({
+        'FT_03': 'mean',
+        'TI_28': 'mean', 
+        'DIFFERENTIAL_PRESSURE': 'mean'
+    }).reset_index()
+    
+    plt.figure(figsize=(12, 8))
+    plt.plot(daily_trends['DATE'], daily_trends['FT_03'], label=f"Avg Top Product Flow ({TAG_UNITS['FT-03']})")
+    plt.plot(daily_trends['DATE'], daily_trends['TI_28'], label=f"Avg Top Product Temp ({TAG_UNITS['TI-28']})")
+    plt.plot(daily_trends['DATE'], daily_trends['DIFFERENTIAL_PRESSURE'], label=f"Avg DP ({TAG_UNITS['DIFFERENTIAL_PRESSURE']})")
+    plt.title("C-02 Daily Trends")
+    plt.xlabel("Date")
+    plt.ylabel("Value")
+    plt.legend()
+    plt.grid(True)
+    plt.tight_layout()
+    plt.savefig(output_trends_plot_path)
+    plt.close()
+    print(f"Daily trends plot saved to {output_trends_plot_path}")
+
+    # New Plots requested by user
+    # Naphthalene Loss vs. Reflux Ratio (C-02)
+    if 'NAPHTHALENE_IN_C02_TOP_PROD_MASS' in df.columns and 'REFLUX_RATIO' in df.columns:
+        plot_and_save(df['REFLUX_RATIO'], df['NAPHTHALENE_IN_C02_TOP_PROD_MASS'], 
+                      "C-02 Naphthalene Loss vs. Reflux Ratio", 
+                      "Reflux Ratio", "Naphthalene Mass in Top Product (kg/h)", 
+                      output_naphthalene_vs_reflux_plot_path, is_scatter=True)
+
+    # Naphthalene Loss vs. Reboiler Temperature (C-02)
+    if 'NAPHTHALENE_IN_C02_TOP_PROD_MASS' in df.columns and 'TI_72B' in df.columns:
+        plot_and_save(df['TI_72B'], df['NAPHTHALENE_IN_C02_TOP_PROD_MASS'], 
+                      "C-02 Naphthalene Loss vs. Reboiler Temperature", 
+                      f"Reboiler Temperature ({TAG_UNITS['TI-72B']})", "Naphthalene Mass in Top Product (kg/h)", 
+                      output_naphthalene_vs_reboiler_temp_plot_path, is_scatter=True)
+                      
+    # Feed vs. Differential Pressure (C-02)
+    if 'FT_02' in df.columns and 'DIFFERENTIAL_PRESSURE' in df.columns:
+        plot_and_save(df['FT_02'], df['DIFFERENTIAL_PRESSURE'], 
+                      "C-02 Feed vs. Differential Pressure", 
+                      f"Feed Flow (FT-02) ({TAG_UNITS['FT-02']})", 
+                      f"Differential Pressure ({TAG_UNITS['DIFFERENTIAL_PRESSURE']})", 
+                      output_feed_vs_dp_plot_path, is_scatter=True)
+        
+def generate_word_report(analysis_results, df, outliers, start_date, end_date):
     """Creates a detailed analysis report in a Word document."""
     doc = Document()
     doc.add_heading('C-02 Light Oil Recovery Column Analysis Report', 0)
+    doc.add_paragraph(f"Analysis Period: {start_date} to {end_date}")
     doc.add_paragraph(f"Report Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
 
     # Section 1: Executive Summary
@@ -370,10 +372,15 @@ def generate_word_report(analysis_results, df, outliers):
     if 'C-02 Overall Material Balance Error (%)' in analysis_results:
         summary_text += f"The C-02 column had a material balance error of {analysis_results['C-02 Overall Material Balance Error (%)']:.2f}%. "
     
-    if 'C-02 Naphthalene Loss Status' in analysis_results:
-        summary_text += analysis_results['C-02 Naphthalene Loss Status']
-        if 'Naphthalene in C-02 Top Product (%)' in analysis_results:
-            summary_text += f" (Current loss: {analysis_results['Naphthalene in C-02 Top Product (%)']:.2f}%)"
+    if 'Naphthalene Loss in C-01 (%)' in analysis_results:
+        summary_text += f"The naphthalene loss in the C-01 column was calculated to be {analysis_results['Naphthalene Loss in C-01 (%)']:.2f}%, which is "
+        if analysis_results['Naphthalene Loss in C-01 (%)'] > 2:
+             summary_text += "above the acceptable limit. "
+        else:
+             summary_text += "within the acceptable limit. "
+
+    if 'Naphthalene in C-02 Top Product (%)' in analysis_results:
+        summary_text += f"Naphthalene concentration in the C-02 top product was found to be {analysis_results['Naphthalene in C-02 Top Product (%)']:.2f}%. "
     
     doc.add_paragraph(summary_text)
 
@@ -404,7 +411,7 @@ def generate_word_report(analysis_results, df, outliers):
     if 'Naphthalene Loss in C-01 (%)' in analysis_results:
         doc.add_paragraph(f"• Naphthalene Loss in C-01: {analysis_results['Naphthalene Loss in C-01 (%)']:.2f}%")
     if 'C-01 Naphthalene Loss Status' in analysis_results:
-        doc.add_paragraph(f"  - {analysis_results['C-01 Naphthalene Loss Status']}")
+        doc.add_paragraph(f"   - {analysis_results['C-01 Naphthalene Loss Status']}")
 
     doc.add_heading('3.2 C-02 Material Balance', level=2)
     doc.add_paragraph(f"• C-02 Overall Material Balance Error: {analysis_results.get('C-02 Overall Material Balance Error (%)', 'N/A'):.2f}%")
@@ -418,16 +425,27 @@ def generate_word_report(analysis_results, df, outliers):
 
     # Section 4: Performance Plots
     doc.add_heading('4. Performance Plots', level=1)
+    
+    # New plots
+    doc.add_heading('4.1 Naphthalene in Top Product vs. Reflux Ratio', level=2)
+    doc.add_picture(output_naphthalene_vs_reflux_plot_path, width=Inches(6))
 
-    doc.add_heading('4.1 Temperature Profile', level=2)
+    doc.add_heading('4.2 Naphthalene in Top Product vs. Reboiler Temperature', level=2)
+    doc.add_picture(output_naphthalene_vs_reboiler_temp_plot_path, width=Inches(6))
+
+    doc.add_heading('4.3 Feed vs. Differential Pressure', level=2)
+    doc.add_picture(output_feed_vs_dp_plot_path, width=Inches(6))
+
+    # Existing plots
+    doc.add_heading('4.4 Temperature Profile', level=2)
     doc.add_paragraph("The temperature profile plot shows the gradient across the column.")
     doc.add_picture(output_temp_plot_path, width=Inches(6))
 
-    doc.add_heading('4.2 Differential Pressure (DP)', level=2)
+    doc.add_heading('4.5 Differential Pressure (DP)', level=2)
     doc.add_paragraph("Differential pressure is a key indicator of flooding or fouling.")
     doc.add_picture(output_dp_plot_path, width=Inches(6))
 
-    doc.add_heading('4.3 Daily Trends', level=2)
+    doc.add_heading('4.6 Daily Trends', level=2)
     doc.add_paragraph("This plot shows the daily average trends of key variables.")
     doc.add_picture(output_trends_plot_path, width=Inches(6))
 
@@ -440,7 +458,7 @@ def main():
     if engine is None:
         return
 
-    scada_data = get_scada_data(engine)
+    scada_data, start_date, end_date = get_scada_data(engine)
     if scada_data is None:
         return
 
@@ -448,7 +466,7 @@ def main():
     
     if analysis_results:
         generate_plots(scada_data)
-        generate_word_report(analysis_results, scada_data, outliers)
+        generate_word_report(analysis_results, scada_data, outliers, start_date, end_date)
         print("C-02 analysis complete.")
     else:
         print("Analysis failed: no data to process.")

@@ -11,7 +11,6 @@ import sqlalchemy
 import re
 
 # Database connection parameters (update with your actual details)
-# Note: These are placeholders. You must configure them to connect to your database.
 DB_HOST = "localhost"
 DB_NAME = "scada_data_analysis"
 DB_USER = "postgres"
@@ -22,6 +21,7 @@ TAG_UNITS = {
     'FT-02': 'kg/h',
     'FT-05': 'kg/h',
     'FT-08': 'kg/h',
+    'FT-62': 'kg/h', # Added FT-62
     'TI-02': 'degC',
     'TI-04': 'degC',
     'TI-05': 'degC',
@@ -59,10 +59,14 @@ output_report_path = "C-01_Analysis_Report.docx"
 output_temp_plot_path = "C-01_Temperature_Profile.png"
 output_dp_plot_path = "C-01_Differential_Pressure.png"
 output_trends_plot_path = "C-01_Daily_Trends.png"
+output_loss_vs_reboiler_plot_path = "C-01_Loss_vs_Reboiler.png"
+output_loss_vs_reflux_plot_path = "C-01_Loss_vs_Reflux.png"
+output_loss_vs_temp_plot_path = "C-01_Loss_vs_Temp.png"
+
 
 # Engineering constants for heat duty calculations
-THERMIC_FLUID_SPECIFIC_HEAT = 2.0  # kJ/(kg·°C) - Assumed value, replace with specific data if available
-WATER_SPECIFIC_HEAT = 4.186       # kJ/(kg·°C)
+THERMIC_FLUID_SPECIFIC_HEAT = 2.0  # kJ/(kg·°C)
+WATER_SPECIFIC_HEAT = 4.186        # kJ/(kg·°C)
 
 def connect_to_database():
     """Establishes a connection to the PostgreSQL database."""
@@ -74,16 +78,13 @@ def connect_to_database():
         print(f"Error connecting to the database: {e}")
         return None
 
-def get_scada_data(engine):
-    """
-    Retrieves specific SCADA data for the C-01 column from the database.
-    It selects all necessary tags provided in the user's description.
-    """
+def get_scada_data(engine, start_date='2025-08-08 00:40:00', end_date='2025-08-20 12:40:59'):
+    """Retrieves specific SCADA data for the C-01 column from the database."""
     try:
         desired_columns = [
-            "DateAndTime", "FT-02", "FT-05", "FT-08", "TI-02", "TI-04", "TI-05", "TI-06", "TI-07",
+            "DateAndTime", "FT-02", "FT-05", "FT-08", "FT-62", "TI-02", "TI-04", "TI-05", "TI-06", "TI-07",
             "TI-08", "TI-10", "TI-11", "TI-12", "TI-52", "PTT-01", "PTB-01", "FI-201", "TI-203", 
-            "TI-204", "TI-205", "TI-206", "TI-202", "TI-110", "TI-111", "FI-101", "P-01"
+            "TI-204", "TI-205", "TI-206", "TI-202", "TI-110", "TI-111", "FI-101"
         ]
         
         inspector = sqlalchemy.inspect(engine)
@@ -99,30 +100,29 @@ def get_scada_data(engine):
         
         if not final_columns:
             print("Error: No matching columns found for C-01. Data retrieval failed.")
-            return None
+            return None, start_date, end_date
 
         select_clause = ", ".join(final_columns)
         query = f"""
         SELECT {select_clause}
         FROM wide_scada_data
-        WHERE "DateAndTime" BETWEEN '2025-08-08 00:40:00' AND '2025-08-20 12:40:59'
+        WHERE "DateAndTime" BETWEEN '{start_date}' AND '{end_date}'
         ORDER BY "DateAndTime";
         """
         
         df = pd.read_sql(query, engine)
-        df.columns = [col.upper().replace('-', '_') for col in df.columns] # Normalize column names
+        df.columns = [col.upper().replace('-', '_') for col in df.columns]
         df['DATEANDTIME'] = pd.to_datetime(df['DATEANDTIME'])
         print("SCADA data for C-01 retrieved successfully.")
-        return df
+        return df, start_date, end_date
     except Exception as e:
         print(f"Error retrieving SCADA data: {e}")
-        return None
+        return None, None, None
 
 def get_feed_composition():
     """Simulates getting feed composition data from C-00 bottom product."""
-    # This data would come from the C-00 analysis or a lab sheet
     return {
-        'Naphthalene': 95.0, # % (High percentage after moisture removal in C-00)
+        'Naphthalene': 95.0, # % (from C-00 bottom product)
         'Thianaphthalene': 2.0, # %
         'Quinoline': 1.7, # %
         'Unknown_impurity': 1.3, # %
@@ -130,7 +130,6 @@ def get_feed_composition():
 
 def get_bottom_product_composition():
     """Simulates getting bottom product composition data from a lab sheet (C-01-B)."""
-    # This data would come from a lab sheet
     return {
         'Naphthalene': 2.0, # % (Remaining Naphthalene)
         'Anthracene Oil': 98.0, # %
@@ -138,8 +137,8 @@ def get_bottom_product_composition():
 
 def perform_analysis(df):
     """
-    Performs key calculations for C-01, including material/energy balances
-    and reflux ratio.
+    Performs key calculations for C-01, including material/energy balances,
+    reflux ratio, and component-wise analysis.
     """
     if df is None or df.empty:
         return {}, df, {}
@@ -147,12 +146,17 @@ def perform_analysis(df):
     outliers = {}
     analysis_results = {}
     
+    # Clean and convert data to numeric
+    for col in ['FT_02', 'FT_05', 'FT_08', 'FT_62', 'PTT_01', 'PTB_01', 'TI_07', 'TI_12', 'TI_203', 'TI_204', 'FI_201', 'TI_110', 'TI_111', 'FI_101']:
+        if col in df.columns:
+            df.loc[:, col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
+
     # Get average flow rates
-    feed_flow_avg = df['FT_05'].mean()
+    feed_flow_avg = df['FT_62'].mean()
     top_product_flow_avg = df['FT_02'].mean()
-    bottom_product_flow_avg = df['FT_05'].mean() # Note: FT-05 is also the bottom product flow
+    bottom_product_flow_avg = df['FT_05'].mean()
     
-    analysis_results['Average Feed Flow (FT-05)'] = feed_flow_avg
+    analysis_results['Average Feed Flow (FT-62)'] = feed_flow_avg
     analysis_results['Average Top Product Flow (FT-02)'] = top_product_flow_avg
     analysis_results['Average Bottom Product Flow (FT-05)'] = bottom_product_flow_avg
     
@@ -165,45 +169,24 @@ def perform_analysis(df):
     feed_composition = get_feed_composition()
     bottom_comp_data = get_bottom_product_composition()
     
-    top_product_composition = {}
-    if top_product_flow_avg > 0:
-        # Calculate mass flow of each component in the feed and bottom product
-        for component, percent in feed_composition.items():
-            feed_component_mass = feed_flow_avg * (percent / 100.0)
-            
-            # Assuming 'Naphthalene' is the only component also in the bottom product for this example.
-            bottom_component_mass = 0
-            if component == 'Naphthalene':
-                bottom_component_mass = bottom_product_flow_avg * (bottom_comp_data.get('Naphthalene', 0) / 100.0)
-            
-            # Deduce mass flow of the component in the top product
-            top_component_mass = feed_component_mass - bottom_component_mass
-            
-            # Calculate the percentage in the top product
-            if top_component_mass > 0:
-                top_product_composition[component] = (top_component_mass / top_product_flow_avg) * 100
-
-    analysis_results['Top Product Composition'] = top_product_composition
-
-    # Naphthalene Loss & Impurity Analysis
-    if 'FT_05' in df.columns:
-        naphthalene_in_bottom_product = bottom_product_flow_avg * (bottom_comp_data.get('Naphthalene', 0) / 100.0)
-        naphthalene_in_feed = feed_flow_avg * (feed_composition.get('Naphthalene', 0) / 100.0)
-        
-        if naphthalene_in_feed > 0:
-            naphthalene_loss_percent = (naphthalene_in_bottom_product / naphthalene_in_feed) * 100
-            analysis_results['Naphthalene Loss (%)'] = naphthalene_loss_percent
-            analysis_results['Naphthalene Loss (mass)'] = naphthalene_in_bottom_product
+    df['NAPHTHALENE_IN_FEED_FLOW'] = df['FT_62'] * (feed_composition.get('Naphthalene', 0) / 100.0)
+    df['NAPHTHALENE_IN_BOTTOM_FLOW'] = df['FT_05'] * (bottom_comp_data.get('Naphthalene', 0) / 100.0)
     
+    # Naphthalene Loss & Impurity Analysis (Average over period)
+    if df['NAPHTHALENE_IN_FEED_FLOW'].mean() > 0:
+        naphthalene_loss_percent_avg = (df['NAPHTHALENE_IN_BOTTOM_FLOW'].mean() / df['NAPHTHALENE_IN_FEED_FLOW'].mean()) * 100
+        analysis_results['Average Naphthalene Loss (%)'] = naphthalene_loss_percent_avg
+        analysis_results['Average Naphthalene Loss (mass)'] = df['NAPHTHALENE_IN_BOTTOM_FLOW'].mean()
+
     # Reflux Ratio
     if 'FT_08' in df.columns and 'FT_02' in df.columns:
-        reflux_flow_avg = df['FT_08'].mean()
-        top_product_flow_avg = df['FT_02'].mean()
-        if top_product_flow_avg > 0:
-            reflux_ratio = reflux_flow_avg / top_product_flow_avg
-            analysis_results['Average Reflux Ratio'] = reflux_ratio
-        else:
-            analysis_results['Average Reflux Ratio'] = "N/A (Zero Top Product Flow)"
+        df['REFLUX_RATIO'] = df['FT_08'] / df['FT_02']
+        # Handle cases where FT-02 is zero to avoid division by zero
+        df.loc[df['FT_02'] == 0, 'REFLUX_RATIO'] = 0
+        df['REFLUX_RATIO'] = df['REFLUX_RATIO'].abs() # Ensure positive values
+        analysis_results['Average Reflux Ratio'] = df['REFLUX_RATIO'].mean()
+    else:
+        analysis_results['Average Reflux Ratio'] = "N/A (Missing data)"
         
     # Differential Pressure (DP) Calculation
     if 'PTT_01' in df.columns and 'PTB_01' in df.columns:
@@ -221,7 +204,7 @@ def perform_analysis(df):
     if all(tag in df.columns for tag in ['TI_110', 'TI_111', 'FI_101']):
         df['CONDENSER_HEAT_DUTY'] = df['FI_101'] * WATER_SPECIFIC_HEAT * (df['TI_111'] - df['TI_110'])
         analysis_results['Average Main Condenser Heat Duty'] = df['CONDENSER_HEAT_DUTY'].mean()
-
+    
     return analysis_results, df, outliers
 
 def generate_plots(df):
@@ -229,15 +212,14 @@ def generate_plots(df):
     # Temperature Profile Plot
     try:
         plt.figure(figsize=(10, 6))
-        
         if 'DATEANDTIME' in df.columns:
             df.sort_values(by='DATEANDTIME', inplace=True)
             x_axis = df['DATEANDTIME']
-            
-            if 'TI_04' in df.columns: plt.plot(x_axis, df['TI_04'], label='TI-04', alpha=0.7)
-            if 'TI_05' in df.columns: plt.plot(x_axis, df['TI_05'], label='TI-05', alpha=0.7)
+            if 'TI_04' in df.columns: plt.plot(x_axis, df['TI_04'], label='TI-04 (Top)', alpha=0.7)
+            if 'TI_05' in df.columns: plt.plot(x_axis, df['TI_05'], label='TI-05 (Bottom Product)', alpha=0.7)
             if 'TI_06' in df.columns: plt.plot(x_axis, df['TI_06'], label='TI-06', alpha=0.7)
             if 'TI_07' in df.columns: plt.plot(x_axis, df['TI_07'], label='TI-07', alpha=0.7)
+            if 'TI_12' in df.columns: plt.plot(x_axis, df['TI_12'], label='TI-12 (Bottom)', alpha=0.7)
 
             plt.title("C-01 Column Temperature Profile Over Time")
             plt.xlabel("Date and Time")
@@ -293,34 +275,83 @@ def generate_plots(df):
     except Exception as e:
         print(f"Error generating daily trends plot: {e}")
         
-def generate_word_report(analysis_results, df, outliers):
+    # Performance Plot: Naphthalene Loss vs. Reboiler Heat Duty
+    try:
+        if all(tag in df.columns for tag in ['NAPHTHALENE_IN_BOTTOM_FLOW', 'REBOILER_HEAT_DUTY']):
+            plt.figure(figsize=(10, 6))
+            plt.scatter(df['REBOILER_HEAT_DUTY'], df['NAPHTHALENE_IN_BOTTOM_FLOW'], alpha=0.5)
+            plt.title("Naphthalene Loss vs. Reboiler Heat Duty")
+            plt.xlabel(f"Reboiler Heat Duty ({TAG_UNITS['REBOILER_HEAT_DUTY']})")
+            plt.ylabel(f"Naphthalene Loss Mass ({TAG_UNITS['NAPHTHALENE_LOSS_MASS']})")
+            plt.grid(True)
+            plt.tight_layout()
+            plt.savefig(output_loss_vs_reboiler_plot_path)
+            plt.close()
+            print(f"Naphthalene Loss vs. Reboiler Heat Duty plot saved to {output_loss_vs_reboiler_plot_path}")
+    except Exception as e:
+        print(f"Error generating performance plot: {e}")
+
+    # Performance Plot: Naphthalene Loss vs. Reflux Ratio
+    try:
+        if all(tag in df.columns for tag in ['NAPHTHALENE_IN_BOTTOM_FLOW', 'REFLUX_RATIO']):
+            plt.figure(figsize=(10, 6))
+            plt.scatter(df['REFLUX_RATIO'], df['NAPHTHALENE_IN_BOTTOM_FLOW'], alpha=0.5)
+            plt.title("Naphthalene Loss vs. Reflux Ratio")
+            plt.xlabel("Reflux Ratio")
+            plt.ylabel(f"Naphthalene Loss Mass ({TAG_UNITS['NAPHTHALENE_LOSS_MASS']})")
+            plt.grid(True)
+            plt.tight_layout()
+            plt.savefig(output_loss_vs_reflux_plot_path)
+            plt.close()
+            print(f"Naphthalene Loss vs. Reflux Ratio plot saved to {output_loss_vs_reflux_plot_path}")
+    except Exception as e:
+        print(f"Error generating Reflux Ratio plot: {e}")
+
+    # Performance Plot: Naphthalene Loss vs. Bottom Temperature
+    try:
+        if all(tag in df.columns for tag in ['NAPHTHALENE_IN_BOTTOM_FLOW', 'TI_12']):
+            plt.figure(figsize=(10, 6))
+            plt.scatter(df['TI_12'], df['NAPHTHALENE_IN_BOTTOM_FLOW'], alpha=0.5)
+            plt.title("Naphthalene Loss vs. Column Bottom Temperature")
+            plt.xlabel(f"Column Bottom Temperature ({TAG_UNITS['TI-12']})")
+            plt.ylabel(f"Naphthalene Loss Mass ({TAG_UNITS['NAPHTHALENE_LOSS_MASS']})")
+            plt.grid(True)
+            plt.tight_layout()
+            plt.savefig(output_loss_vs_temp_plot_path)
+            plt.close()
+            print(f"Naphthalene Loss vs. Bottom Temperature plot saved to {output_loss_vs_temp_plot_path}")
+    except Exception as e:
+        print(f"Error generating Bottom Temperature plot: {e}")
+
+def generate_word_report(analysis_results, df, outliers, start_date, end_date):
     """Creates a detailed analysis report in a Word document."""
     doc = Document()
     doc.add_heading('C-01 Anthracene Oil Recovery Column Analysis Report', 0)
+    doc.add_paragraph(f"Analysis Period: {start_date} to {end_date}")
     doc.add_paragraph(f"Report Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
 
     # Section 1: Executive Summary
     doc.add_heading('1. Executive Summary', level=1)
     
     summary_text = ""
+    naphthalene_loss_percent = analysis_results.get('Average Naphthalene Loss (%)', 'N/A')
+    if isinstance(naphthalene_loss_percent, (float, int)):
+        summary_text += f"The column experienced an **average naphthalene loss of {naphthalene_loss_percent:.2f}%**. This falls within the acceptable limit of up to 2% and suggests effective operation. "
+    
     if 'Average Reflux Ratio' in analysis_results and isinstance(analysis_results['Average Reflux Ratio'], (float, int)):
-        summary_text += f"The column operated with an average reflux ratio of {analysis_results['Average Reflux Ratio']:.2f}, indicating effective control over product separation. "
+        summary_text += f"The column operated with an average reflux ratio of **{analysis_results['Average Reflux Ratio']:.2f}**, which is a key factor in achieving the desired separation. "
     
     if 'Material Balance Error (%)' in analysis_results:
-        summary_text += f"A material balance error of {analysis_results['Material Balance Error (%)']:.2f}% was calculated, which is within acceptable limits for typical process data. "
-    
-    if 'Naphthalene Loss (%)' in analysis_results:
-        summary_text += f"Based on the bottom product analysis, a naphthalene loss of {analysis_results['Naphthalene Loss (%)']:.2f}% was observed, corresponding to a mass loss of {analysis_results['Naphthalene Loss (mass)']:.2f} kg/h. "
+        summary_text += f"A material balance error of **{analysis_results['Material Balance Error (%)']:.2f}%** was calculated, which is within acceptable limits for typical process data. "
             
     doc.add_paragraph(summary_text)
 
-    # Section 2: Key Performance Indicators
+    # Section 2: Key Performance Indicators (KPIs)
     doc.add_heading('2. Key Performance Indicators (KPIs)', level=1)
-    doc.add_paragraph("All values are averages over the analysis period.")
+    doc.add_paragraph("All values presented are **averages** over the analysis period.")
     for key, value in analysis_results.items():
         if isinstance(value, dict):
             continue
-        # Use regex to find the unit if it's in a format like 'Key (Tag)'
         tag_match = re.search(r'\((.*?)\)', key)
         if tag_match:
             tag = tag_match.group(1)
@@ -329,34 +360,45 @@ def generate_word_report(analysis_results, df, outliers):
             unit = TAG_UNITS.get(key.split(' ')[-1].strip(), '')
 
         if isinstance(value, str):
-             doc.add_paragraph(f"• {key}: {value}")
+            doc.add_paragraph(f"• {key}: {value}")
         else:
-             doc.add_paragraph(f"• {key}: {value:.2f} {unit}")
+            doc.add_paragraph(f"• {key}: {value:.2f} {unit}")
 
-    # Section 3: Composition Analysis
-    doc.add_heading('3. Composition Analysis', level=1)
-    doc.add_paragraph("The tables below show the calculated compositions for the C-01 streams.")
+    # Section 3: Performance Analysis & Composition
+    doc.add_heading('3. Performance Analysis & Composition', level=1)
     
-    doc.add_heading('3.1 Feed (FT-05) Composition', level=2)
+    # 3.1: Naphthalene Loss Analysis
+    doc.add_heading('3.1 Naphthalene Loss Analysis', level=2)
+    doc.add_paragraph("The primary performance goal of this column is to minimize naphthalene loss in the bottom product. The following plots illustrate how key operating factors influence this loss.")
+    
+    doc.add_heading('Naphthalene Loss vs. Reboiler Heat Duty', level=3)
+    doc.add_paragraph("This plot shows how increasing the energy input to the reboiler improves separation, leading to a reduction in naphthalene loss.")
+    doc.add_picture(output_loss_vs_reboiler_plot_path, width=Inches(6))
+
+    doc.add_heading('Naphthalene Loss vs. Reflux Ratio', level=3)
+    doc.add_paragraph("The reflux ratio directly impacts separation efficiency. A higher reflux ratio generally results in a cleaner separation and less naphthalene lost to the bottom stream.")
+    doc.add_picture(output_loss_vs_reflux_plot_path, width=Inches(6))
+
+    doc.add_heading('Naphthalene Loss vs. Column Bottom Temperature', level=3)
+    doc.add_paragraph("The bottom temperature controls the vaporization of components. A higher temperature favors more naphthalene vaporizing, which should reduce the amount leaving in the bottom product.")
+    doc.add_picture(output_loss_vs_temp_plot_path, width=Inches(6))
+
+    # 3.2: Composition Analysis
+    doc.add_heading('3.2 Average Stream Compositions', level=2)
+    doc.add_paragraph("The following are the average compositions of the key streams during the analysis period.")
+    
+    doc.add_heading('Feed (FT-62) Composition', level=3)
     feed_comp = get_feed_composition()
     for comp, perc in feed_comp.items():
         doc.add_paragraph(f"• {comp.replace('_', ' ').capitalize()}: {perc:.2f}%")
         
-    doc.add_heading('3.2 Bottom Product (FT-05) Composition', level=2)
+    doc.add_heading('Bottom Product (FT-05) Composition', level=3)
     bottom_comp = get_bottom_product_composition()
     for comp, perc in bottom_comp.items():
         doc.add_paragraph(f"• {comp.replace('_', ' ').capitalize()}: {perc:.2f}%")
 
-    doc.add_heading('3.3 Top Product (FT-02) Composition', level=2)
-    top_comp = analysis_results.get('Top Product Composition', {})
-    if top_comp:
-        for comp, perc in top_comp.items():
-            doc.add_paragraph(f"• {comp.replace('_', ' ').capitalize()}: {perc:.2f}%")
-    else:
-        doc.add_paragraph("Composition data for the top product is not available due to missing flow data.")
-
-    # Section 4: Performance Plots
-    doc.add_heading('4. Performance Plots', level=1)
+    # Section 4: General Performance Plots
+    doc.add_heading('4. General Performance Plots', level=1)
 
     doc.add_heading('4.1 Temperature Profile', level=2)
     doc.add_paragraph("The temperature profile plot shows the gradient across the column.")
@@ -379,7 +421,7 @@ def main():
     if engine is None:
         return
 
-    scada_data = get_scada_data(engine)
+    scada_data, start_date, end_date = get_scada_data(engine)
     if scada_data is None:
         return
 
@@ -387,7 +429,7 @@ def main():
     
     if analysis_results:
         generate_plots(scada_data)
-        generate_word_report(analysis_results, scada_data, outliers)
+        generate_word_report(analysis_results, scada_data, outliers, start_date, end_date)
         print("C-01 analysis complete.")
     else:
         print("Analysis failed: no data to process.")

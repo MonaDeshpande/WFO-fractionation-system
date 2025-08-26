@@ -61,10 +61,13 @@ output_report_path = "C-03_Analysis_Report.docx"
 output_temp_plot_path = "C-03_Temperature_Profile.png"
 output_dp_plot_path = "C-03_Differential_Pressure.png"
 output_trends_plot_path = "C-03_Daily_Trends.png"
+output_purity_reflux_plot_path = "C-03_Purity_vs_Reflux.png"
+output_dp_purity_plot_path = "C-03_DP_vs_Purity.png"
+output_heat_reflux_plot_path = "C-03_Heat_vs_Reflux.png"
 
 # Engineering constants for heat duty calculations
-THERMIC_FLUID_SPECIFIC_HEAT = 2.0  # kJ/(kg·°C) - Assumed value
-WATER_SPECIFIC_HEAT = 4.186       # kJ/(kg·°C)
+THERMIC_FLUID_SPECIFIC_HEAT = 2.0   # kJ/(kg·°C) - Assumed value
+WATER_SPECIFIC_HEAT = 4.186        # kJ/(kg·°C)
 
 # File path for composition data.
 COMPOSITION_FILE_PATH = "your_composition_data.csv"
@@ -232,6 +235,7 @@ def perform_analysis(df):
     
     # Reflux Ratio
     if 'FT10' in df.columns and 'FT04' in df.columns:
+        df['REFLUX_RATIO'] = df['FT10'] / df['FT04']
         reflux_flow_avg = df['FT10'].mean()
         top_product_flow_avg = df['FT04'].mean()
         
@@ -262,31 +266,34 @@ def perform_analysis(df):
 
     return analysis_results, df, outliers
 
-def generate_plots(df):
+def generate_plots(df, analysis_results):
     """Generates and saves temperature profile, DP, and daily trends plots."""
+    if 'DATEANDTIME' not in df.columns:
+        print("Date and time column is missing. Cannot generate plots.")
+        return
+
+    df.sort_values(by='DATEANDTIME', inplace=True)
+    x_axis = df['DATEANDTIME']
+
     # Temperature Profile Plot
     try:
         plt.figure(figsize=(10, 6))
         
-        if 'DATEANDTIME' in df.columns:
-            df.sort_values(by='DATEANDTIME', inplace=True)
-            x_axis = df['DATEANDTIME']
-            
-            temp_tags = ['TI31', 'TI32', 'TI33', 'TI34', 'TI35', 'TI36', 'TI37', 'TI38', 'TI39', 'TI40']
-            for tag in temp_tags:
-                if tag in df.columns:
-                    plt.plot(x_axis, df[tag], label=tag, alpha=0.7)
+        temp_tags = ['TI31', 'TI32', 'TI33', 'TI34', 'TI35', 'TI36', 'TI37', 'TI38', 'TI39', 'TI40']
+        for tag in temp_tags:
+            if tag in df.columns:
+                plt.plot(x_axis, df[tag], label=tag, alpha=0.7)
 
-            plt.title("C-03 Column Temperature Profile Over Time")
-            plt.xlabel("Date and Time")
-            plt.ylabel(f"Temperature (degC)")
-            plt.legend(ncol=2)
-            plt.grid(True)
-            plt.tight_layout()
-            plt.savefig(output_temp_plot_path)
-            plt.close()
-            print(f"Temperature profile plot saved to {output_temp_plot_path}")
-            
+        plt.title("C-03 Column Temperature Profile Over Time")
+        plt.xlabel("Date and Time")
+        plt.ylabel(f"Temperature (degC)")
+        plt.legend(ncol=2)
+        plt.grid(True)
+        plt.tight_layout()
+        plt.savefig(output_temp_plot_path)
+        plt.close()
+        print(f"Temperature profile plot saved to {output_temp_plot_path}")
+        
     except Exception as e:
         print(f"Error generating temperature plot: {e}")
         
@@ -310,7 +317,6 @@ def generate_plots(df):
     try:
         df['DATE'] = df['DATEANDTIME'].dt.date
         
-        # Check for column existence before using it in the groupby aggregation
         agg_dict = {'FT04': 'mean', 'DIFFERENTIAL_PRESSURE': 'mean'}
         if 'TI44' in df.columns:
             agg_dict['TI44'] = 'mean'
@@ -320,7 +326,6 @@ def generate_plots(df):
         plt.figure(figsize=(12, 8))
         plt.plot(daily_trends['DATE'], daily_trends['FT04'], label=f"Avg Top Product Flow ({TAG_UNITS['FT-04']})")
         
-        # Only plot TI-44 if the column exists in the aggregated data
         if 'TI44' in daily_trends.columns:
             plt.plot(daily_trends['DATE'], daily_trends['TI44'], label=f"Avg Top Product Temp ({TAG_UNITS['TI-44']})")
         
@@ -337,6 +342,58 @@ def generate_plots(df):
         print(f"Daily trends plot saved to {output_trends_plot_path}")
     except Exception as e:
         print(f"Error generating daily trends plot: {e}")
+
+    # Purity vs. Reflux Ratio
+    try:
+        if 'REFLUX_RATIO' in df.columns and 'Naphthalene in Top Product (%)' in analysis_results:
+            purity = analysis_results['Naphthalene in Top Product (%)']
+            if isinstance(purity, (int, float)):
+                plt.figure(figsize=(10, 6))
+                plt.scatter(df['REFLUX_RATIO'], [purity]*len(df), alpha=0.5)
+                plt.title("Naphthalene Purity vs. Reflux Ratio")
+                plt.xlabel("Reflux Ratio")
+                plt.ylabel("Naphthalene Purity (%)")
+                plt.grid(True)
+                plt.tight_layout()
+                plt.savefig(output_purity_reflux_plot_path)
+                plt.close()
+                print(f"Purity vs. Reflux plot saved to {output_purity_reflux_plot_path}")
+    except Exception as e:
+        print(f"Error generating Purity vs. Reflux plot: {e}")
+        
+    # DP vs. Purity Plot
+    try:
+        if 'DIFFERENTIAL_PRESSURE' in df.columns and 'Naphthalene in Top Product (%)' in analysis_results:
+            purity = analysis_results['Naphthalene in Top Product (%)']
+            if isinstance(purity, (int, float)):
+                plt.figure(figsize=(10, 6))
+                plt.scatter(df['DIFFERENTIAL_PRESSURE'], [purity]*len(df), alpha=0.5)
+                plt.title("Naphthalene Purity vs. Differential Pressure")
+                plt.xlabel(f"Differential Pressure ({TAG_UNITS['DIFFERENTIAL_PRESSURE']})")
+                plt.ylabel("Naphthalene Purity (%)")
+                plt.grid(True)
+                plt.tight_layout()
+                plt.savefig(output_dp_purity_plot_path)
+                plt.close()
+                print(f"DP vs. Purity plot saved to {output_dp_purity_plot_path}")
+    except Exception as e:
+        print(f"Error generating DP vs. Purity plot: {e}")
+
+    # Reboiler Heat Duty vs. Reflux Ratio
+    try:
+        if 'REFLUX_RATIO' in df.columns and 'REBOILER_HEAT_DUTY' in df.columns:
+            plt.figure(figsize=(10, 6))
+            plt.scatter(df['REFLUX_RATIO'], df['REBOILER_HEAT_DUTY'], alpha=0.5)
+            plt.title("Reboiler Heat Duty vs. Reflux Ratio")
+            plt.xlabel("Reflux Ratio")
+            plt.ylabel(f"Reboiler Heat Duty ({TAG_UNITS['REBOILER_HEAT_DUTY']})")
+            plt.grid(True)
+            plt.tight_layout()
+            plt.savefig(output_heat_reflux_plot_path)
+            plt.close()
+            print(f"Reboiler Heat Duty vs. Reflux Ratio plot saved to {output_heat_reflux_plot_path}")
+    except Exception as e:
+        print(f"Error generating Reboiler Heat Duty vs. Reflux Ratio plot: {e}")
         
 def generate_word_report(analysis_results, df, outliers):
     """Creates a detailed analysis report in a Word document."""
@@ -398,15 +455,33 @@ def generate_word_report(analysis_results, df, outliers):
 
     doc.add_heading('4.1 Temperature Profile', level=2)
     doc.add_paragraph("The temperature profile plot shows the gradient across the column.")
-    doc.add_picture(output_temp_plot_path, width=Inches(6))
+    if os.path.exists(output_temp_plot_path):
+        doc.add_picture(output_temp_plot_path, width=Inches(6))
 
     doc.add_heading('4.2 Differential Pressure (DP)', level=2)
     doc.add_paragraph("Differential pressure is a key indicator of flooding or fouling.")
-    doc.add_picture(output_dp_plot_path, width=Inches(6))
+    if os.path.exists(output_dp_plot_path):
+        doc.add_picture(output_dp_plot_path, width=Inches(6))
 
     doc.add_heading('4.3 Daily Trends', level=2)
     doc.add_paragraph("This plot shows the daily average trends of key variables.")
-    doc.add_picture(output_trends_plot_path, width=Inches(6))
+    if os.path.exists(output_trends_plot_path):
+        doc.add_picture(output_trends_plot_path, width=Inches(6))
+    
+    doc.add_heading('4.4 Naphthalene Purity vs. Reflux Ratio', level=2)
+    doc.add_paragraph("This plot shows how product purity is affected by the reflux ratio.")
+    if os.path.exists(output_purity_reflux_plot_path):
+        doc.add_picture(output_purity_reflux_plot_path, width=Inches(6))
+
+    doc.add_heading('4.5 Naphthalene Purity vs. Differential Pressure', level=2)
+    doc.add_paragraph("This plot illustrates the relationship between product purity and column stability.")
+    if os.path.exists(output_dp_purity_plot_path):
+        doc.add_picture(output_dp_purity_plot_path, width=Inches(6))
+
+    doc.add_heading('4.6 Reboiler Heat Duty vs. Reflux Ratio', level=2)
+    doc.add_paragraph("This plot visualizes the energy consumption cost for different reflux ratios.")
+    if os.path.exists(output_heat_reflux_plot_path):
+        doc.add_picture(output_heat_reflux_plot_path, width=Inches(6))
 
     doc.save(output_report_path)
     print(f"Analysis report generated successfully at {output_report_path}")
@@ -424,7 +499,7 @@ def main():
     analysis_results, scada_data, outliers = perform_analysis(scada_data)
     
     if analysis_results:
-        generate_plots(scada_data)
+        generate_plots(scada_data, analysis_results)
         generate_word_report(analysis_results, scada_data, outliers)
         print("C-03 analysis complete.")
     else:
