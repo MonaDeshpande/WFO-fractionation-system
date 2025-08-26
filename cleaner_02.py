@@ -222,6 +222,10 @@ def process_scada_data_in_range(start_timestamp, end_timestamp):
             return
 
         df_raw = pd.DataFrame(raw_data, columns=['DateAndTime', 'TagName', 'Val'])
+        
+        # --- FIX: Convert 'Val' column to numeric before pivoting ---
+        df_raw['Val'] = pd.to_numeric(df_raw['Val'], errors='coerce')
+        
         df_pivot = df_raw.pivot_table(index='DateAndTime', columns='TagName', values='Val', aggfunc='mean')
         df_pivot.reset_index(inplace=True)
         df_pivot.columns.name = None
