@@ -2,6 +2,9 @@
 echo Running SCADA Data Cleaning Script...
 echo.
 
+REM --- Set the current directory to the location of this batch file ---
+cd /d "%~dp0"
+
 REM --- Check for Python installation ---
 python --version >nul 2>nul
 if %errorlevel% neq 0 (
